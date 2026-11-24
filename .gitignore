@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-packages/
+src-tauri/target/
+playwright-report/
+test-results/
+coverage/
+*.log
+.DS_Store
+Thumbs.db

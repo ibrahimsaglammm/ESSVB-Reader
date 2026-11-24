@@ -1,0 +1,187 @@
+name: Release (Windows 11 & CachyOS/Arch Linux)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - run: pnpm run build
+      - run: pnpm exec tauri build --bundles "msi,nsis"
+
+      - name: Package Windows installers and portable zip
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $pkgJson = Get-Content package.json -Raw | ConvertFrom-Json
+          $ver = $pkgJson.version
+          New-Item -ItemType Directory -Force -Path release-win | Out-Null
+          Copy-Item "src-tauri\target\release\bundle\msi\*.msi" release-win -Force
+          Copy-Item "src-tauri\target\release\bundle\nsis\*.exe" release-win -Force
+
+          $stage = Join-Path "release-win" "portable-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "src-tauri\target\release\essvb-reader.exe" (Join-Path $stage "essvb-reader.exe") -Force
+          Set-Content -Path (Join-Path $stage "portable.txt") -Value "ESSVB-Reader Portable Mode Marker" -Encoding UTF8
+          Copy-Item "LICENSE" (Join-Path $stage "LICENSE") -Force
+          Copy-Item "THIRD_PARTY_LICENSES.md" (Join-Path $stage "THIRD_PARTY_LICENSES.md") -Force
+          Set-Content -Path (Join-Path $stage "README-PORTABLE.txt") -Value "ESSVB-Reader v$ver Portable Edition" -Encoding UTF8
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath "release-win\ESSVB-Reader-$ver-windows-x64-portable.zip" -CompressionLevel Optimal
+          Remove-Item -Recurse -Force $stage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-packages
+          path: release-win/*
+
+  build-linux-appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libsecret-1-dev
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Build AppImage
+        env:
+          NO_STRIP: "true"
+        run: pnpm exec tauri build --bundles appimage
+
+      - name: Collect AppImage
+        run: |
+          mkdir -p release-appimage
+          cp -f src-tauri/target/release/bundle/appimage/*.AppImage release-appimage/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: release-appimage/*
+
+  build-cachyos-arch:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Arch Linux build packages and pnpm 12
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git rust nodejs npm pnpm pkgconf webkit2gtk-4.1 gtk3 libsecret hicolor-icon-theme
+          npm install -g pnpm@12.15.0
+          useradd -m -G wheel builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          chown -R builder:builder "${GITHUB_WORKSPACE}"
+
+      - name: Build Arch / CachyOS package via PKGBUILD
+        run: |
+          su - builder -c "cd '${GITHUB_WORKSPACE}/packaging/arch' && makepkg -f --noconfirm"
+          mkdir -p release-arch
+          cp -f packaging/arch/*.pkg.tar.zst release-arch/
+          cp -f packaging/arch/PKGBUILD release-arch/PKGBUILD
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cachyos-arch-pkg
+          path: release-arch/*
+
+  publish-release:
+    needs: [build-windows, build-linux-appimage, build-cachyos-arch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+
+      - name: Collect assets, generate SHA256SUMS.txt & latest.json
+        run: |
+          mkdir -p final-assets
+          find downloaded -type f -exec cp -f {} final-assets/ \;
+          cd final-assets
+          sha256sum * > SHA256SUMS.txt
+          VER=$(node -p "JSON.parse(require('fs').readFileSync('../package.json','utf8')).version")
+          REPO="${GITHUB_REPOSITORY}"
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" != v* ]]; then TAG="v$VER"; fi
+          export VER REPO TAG
+          node -e '
+            const fs = require("fs");
+            const files = fs.readdirSync(".").filter(f => f !== "SHA256SUMS.txt" && f !== "latest.json");
+            const sums = {};
+            for (const line of fs.readFileSync("SHA256SUMS.txt","utf8").trim().split("\n")) {
+              const [hash, name] = line.trim().split(/\s+/);
+              sums[name] = hash;
+            }
+            const base = `https://github.com/${process.env.REPO}/releases/download/${process.env.TAG}`;
+            const manifest = {
+              version: process.env.VER,
+              notes: "Windows 11 (.msi, -setup.exe, portable.zip) ve CachyOS/Arch Linux (.AppImage, .pkg.tar.zst) surumleri.",
+              releasePageUrl: `https://github.com/${process.env.REPO}/releases/tag/${process.env.TAG}`,
+              assets: files.map(name => ({
+                name,
+                downloadUrl: `${base}/${encodeURIComponent(name)}`,
+                sizeBytes: fs.statSync(name).size,
+                sha256: sums[name] || null,
+              }))
+            };
+            fs.writeFileSync("latest.json", JSON.stringify(manifest, null, 2));
+          '
+          ls -lh
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', '0.1.0') }}
+          name: ESSVB-Reader v0.1.0 (Windows 11 & CachyOS/Arch Linux)
+          generate_release_notes: true
+          prerelease: true
+          files: final-assets/*

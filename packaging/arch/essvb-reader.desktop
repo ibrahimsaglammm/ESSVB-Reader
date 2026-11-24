@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=ESSVB-Reader
+Comment=Güvenli, telemetrisiz EPUB okuyucu
+Exec=essvb-reader %U
+Icon=essvb-reader
+Terminal=false
+Type=Application
+Categories=Office;Viewer;Education;
+MimeType=application/epub+zip;
+StartupWMClass=essvb-reader
+Keywords=epub;ebook;reader;tts;

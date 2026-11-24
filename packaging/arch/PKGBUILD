@@ -1,0 +1,53 @@
+# Maintainer: ESSVB-Reader Contributors
+pkgname=essvb-reader
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Güvenli, telemetrisiz, sandbox korumalı masaüstü EPUB okuyucu (v0.1.0 hazırlık sürümü)"
+arch=('x86_64')
+url="https://github.com/ibrahimsaglammm/ESSVB-Reader"
+license=('MIT')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libsecret'
+  'hicolor-icon-theme'
+)
+makedepends=(
+  'rust'
+  'cargo'
+  'nodejs'
+  'pnpm'
+  'pkgconf'
+)
+optdepends=(
+  'espeak-ng: Çevrimdışı Türkçe sesli okuma motoru'
+  'piper-tts-bin: Nöral Türkçe sesli okuma motoru (AUR)'
+  'ollama: Yerel localhost TTS metin hazırlama desteği'
+)
+options=('!lto')
+
+# Yerel kaynak ağacı üzerinden paketlemek için makepkg'i bu dizinde çalıştırın
+# veya release kaynağını source=() içine ekleyin.
+build() {
+  local src_root
+  src_root="$(cd "${startdir}/../.." && pwd)"
+  cd "$src_root"
+
+  export CARGO_TARGET_DIR="${srcdir}/target"
+  pnpm install --frozen-lockfile
+  pnpm run build
+  cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+}
+
+package() {
+  local src_root
+  src_root="$(cd "${startdir}/../.." && pwd)"
+
+  install -Dm755 "${srcdir}/target/release/essvb-reader" "${pkgdir}/usr/bin/essvb-reader"
+  install -Dm644 "${startdir}/essvb-reader.desktop" "${pkgdir}/usr/share/applications/essvb-reader.desktop"
+  install -Dm644 "${src_root}/src-tauri/icons/icon.png" "${pkgdir}/usr/share/icons/hicolor/256x256/apps/essvb-reader.png"
+  install -Dm644 "${src_root}/src-tauri/icons/128x128.png" "${pkgdir}/usr/share/icons/hicolor/128x128/apps/essvb-reader.png"
+  install -Dm644 "${src_root}/src-tauri/icons/32x32.png" "${pkgdir}/usr/share/icons/hicolor/32x32/apps/essvb-reader.png"
+  install -Dm644 "${src_root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 "${src_root}/THIRD_PARTY_LICENSES.md" "${pkgdir}/usr/share/licenses/${pkgname}/THIRD_PARTY_LICENSES.md"
+}
