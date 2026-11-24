@@ -91,6 +91,8 @@ struct CustomManifestAsset {
 struct GitHubRelease {
     tag_name: String,
     #[serde(default)]
+    draft: bool,
+    #[serde(default)]
     html_url: String,
     #[serde(default)]
     body: Option<String>,
@@ -227,6 +229,31 @@ fn is_allowed_update_host(url: &Url) -> bool {
     )
 }
 
+fn extract_github_release(raw_json: &str) -> Option<GitHubRelease> {
+    if let Ok(single) = serde_json::from_str::<GitHubRelease>(raw_json) {
+        if !single.draft {
+            return Some(single);
+        }
+    }
+    if let Ok(list) = serde_json::from_str::<Vec<GitHubRelease>>(raw_json) {
+        return list.into_iter().find(|r| !r.draft);
+    }
+    None
+}
+
+fn github_releases_fallback_url(url: &Url) -> Option<Url> {
+    let host = url.host_str()?.to_ascii_lowercase();
+    if host != "api.github.com" {
+        return None;
+    }
+    let trimmed_path = url.path().trim_end_matches('/');
+    let prefix = trimmed_path.strip_suffix("/releases/latest")?;
+    let mut fallback = url.clone();
+    fallback.set_path(&format!("{prefix}/releases"));
+    fallback.set_query(Some("per_page=5"));
+    Some(fallback)
+}
+
 fn validate_update_filename(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty()
@@ -266,7 +293,7 @@ pub fn parse_release_payload(
         .map_err(|e| AppError::Validation(format!("Geçersiz yerel sürüm: {e}")))?;
 
     let (latest_raw, notes, page_url, fallback_dl, assets) =
-        if let Ok(gh) = serde_json::from_str::<GitHubRelease>(raw_json) {
+        if let Some(gh) = extract_github_release(raw_json) {
             let mut mapped_assets = Vec::new();
             for a in gh.assets {
                 let tag = classify_asset_platform(&a.name);
@@ -393,12 +420,25 @@ pub async fn check_for_updates(
         .build()
         .map_err(|e| AppError::Network(format!("HTTP istemcisi oluşturulamadı: {e}")))?;
 
-    let resp = client
-        .get(parsed)
+    let mut resp = client
+        .get(parsed.clone())
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
         .map_err(|e| AppError::Network(format!("Güncelleme sunucusuna bağlanılamadı: {e}")))?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        if let Some(fallback_url) = github_releases_fallback_url(&parsed) {
+            resp = client
+                .get(fallback_url)
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+                .map_err(|e| {
+                    AppError::Network(format!("Güncelleme sunucusuna bağlanılamadı: {e}"))
+                })?;
+        }
+    }
 
     if !resp.status().is_success() {
         return Err(AppError::Network(format!(
@@ -414,7 +454,7 @@ pub async fn check_for_updates(
 
     // If GitHub Release includes SHA256SUMS.txt and an asset lacks inline digest, fetch SHA256SUMS.txt
     let mut sha_map = HashMap::new();
-    if let Ok(gh) = serde_json::from_str::<GitHubRelease>(&raw_json) {
+    if let Some(gh) = extract_github_release(&raw_json) {
         if let Some(sums_asset) = gh.assets.iter().find(|a| a.name == "SHA256SUMS.txt") {
             if let Ok(sums_url) = Url::parse(&sums_asset.browser_download_url) {
                 if is_allowed_update_host(&sums_url) {
@@ -781,6 +821,46 @@ mod tests {
             .unwrap_err();
             assert_eq!(err_host.code(), "SECURITY_ERROR");
         });
+    }
+
+    #[test]
+    fn parses_github_releases_array_skipping_drafts() {
+        let releases_json = r#"[
+          {
+            "tag_name": "v0.3.0",
+            "draft": true,
+            "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.3.0",
+            "assets": []
+          },
+          {
+            "tag_name": "v0.2.0",
+            "draft": false,
+            "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.2.0",
+            "body": "Ön sürüm notları.",
+            "assets": [
+              {
+                "name": "ESSVB-Reader_0.2.0_x64-setup.exe",
+                "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader_0.2.0_x64-setup.exe",
+                "size": 5400000
+              }
+            ]
+          }
+        ]"#;
+
+        let parsed = parse_release_payload(releases_json, false, true, false, None).unwrap();
+        assert_eq!(parsed.latest_version, "0.2.0");
+        assert!(parsed.update_available);
+
+        let gh_latest =
+            Url::parse("https://api.github.com/repos/ibrahimsaglammm/ESSVB-Reader/releases/latest")
+                .unwrap();
+        assert_eq!(
+            github_releases_fallback_url(&gh_latest).unwrap().as_str(),
+            "https://api.github.com/repos/ibrahimsaglammm/ESSVB-Reader/releases?per_page=5"
+        );
+
+        let custom = Url::parse("https://example.com/releases/latest").unwrap();
+        assert!(github_releases_fallback_url(&custom).is_none());
     }
 
     #[test]
