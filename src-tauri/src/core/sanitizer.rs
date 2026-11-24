@@ -486,7 +486,7 @@ fn decode_basic_entities(input: &str) -> String {
     while let Some(amp_idx) = rest.find('&') {
         out.push_str(&rest[..amp_idx]);
         let after = &rest[amp_idx..];
-        if let Some(semi_idx) = after[..after.len().min(12)].find(';') {
+        if let Some(semi_idx) = after.bytes().take(12).position(|b| b == b';') {
             let entity = &after[1..semi_idx];
             let replacement = match entity {
                 "amp" => Some("&".to_string()),
@@ -619,5 +619,14 @@ mod tests {
         assert!(result.body_html.contains("href=\"#dipnot1\""));
         assert!(result.src_doc.contains("script-src 'none'"));
         assert!(result.plain_text.contains("Merhaba Dünya!"));
+    }
+
+    #[test]
+    fn decode_entities_handles_turkish_multibyte_chars_near_byte_12() {
+        // Byte 11..13 is multi-byte 'ç', so naive byte slicing at index 12 previously panicked.
+        let sample = "<p>Ayrıca &1234567890çalışma ve ğüşöıİ &amp; örnek metin</p>";
+        let plain = html_to_plain_text(sample);
+        assert!(plain.contains("&1234567890çalışma"));
+        assert!(plain.contains("& örnek metin"));
     }
 }

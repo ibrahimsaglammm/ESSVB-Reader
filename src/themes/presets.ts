@@ -124,6 +124,16 @@ export function buildReaderIframeCss(
     a { color: ${pal.accent}; }
     blockquote { border-left: 3px solid ${pal.accent}; padding-left: 14px; opacity: 0.9; }
     code, pre { background: ${pal.surfaceAlt}; padding: 2px 5px; border-radius: 4px; }
+    mark.essvb-highlight { color: inherit; cursor: pointer; transition: box-shadow 0.25s ease; }
+    mark.essvb-highlight-pulse {
+      outline: 2px solid ${pal.accent};
+      box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.35);
+    }
+    mark.essvb-tts-active {
+      background-color: rgba(45, 212, 191, 0.32);
+      color: inherit;
+      border-radius: 3px;
+    }
   `;
 }
 

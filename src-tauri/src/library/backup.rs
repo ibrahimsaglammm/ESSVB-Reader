@@ -108,6 +108,7 @@ pub fn import_library_json(
                 quote_text: note.quote_text,
                 note_text: note.note_text,
                 color: note.color,
+                highlight_style: note.highlight_style,
                 start_offset: note.start_offset,
                 end_offset: note.end_offset,
             });
@@ -258,6 +259,7 @@ mod tests {
                 quote_text: "Deneme metni.".into(),
                 note_text: "Önemli alıntı".into(),
                 color: "yellow".into(),
+                highlight_style: "solid".into(),
                 start_offset: 0,
                 end_offset: 13,
             })

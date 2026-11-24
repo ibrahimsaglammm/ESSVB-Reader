@@ -14,6 +14,8 @@ import type {
   CreateAnnotationInput,
   ReadingStatus,
   ShelfDto,
+  TextAssistRequest,
+  TextAssistResponse,
   TextChunk,
   TocItem,
   TtsCacheStats,
@@ -82,6 +84,12 @@ interface AppStore {
   bookSearchResults: BookSearchMatch[];
   bookAnnotations: AnnotationDto[];
   globalAnnotations: AnnotationDto[];
+  pendingJumpAnnotation: {
+    id: string;
+    spineIndex: number;
+    startOffset: number;
+    quoteText: string;
+  } | null;
   ttsStatuses: TtsProviderStatus[];
   ttsState: "idle" | "playing" | "paused" | "loading" | "error";
   ttsChunks: TextChunk[];
@@ -144,10 +152,19 @@ interface AppStore {
   saveReaderProgress: (spineIndex: number, scrollOffset: number) => Promise<void>;
   searchInBook: (query: string) => Promise<void>;
   createAnnotation: (input: CreateAnnotationInput) => Promise<void>;
-  updateAnnotation: (id: string, noteText: string, color: string) => Promise<void>;
+  updateAnnotation: (
+    id: string,
+    noteText: string,
+    color: string,
+    highlightStyle?: string,
+  ) => Promise<void>;
   deleteAnnotation: (id: string) => Promise<void>;
+  jumpToAnnotation: (ann: AnnotationDto) => Promise<void>;
+  clearPendingJumpAnnotation: () => void;
   loadGlobalAnnotations: (bookId?: string, search?: string) => Promise<void>;
   exportNotes: (format: "md" | "json", bookId: string | null) => Promise<void>;
+  assistSelectedText: (request: TextAssistRequest) => Promise<TextAssistResponse>;
+  openExternalUrl: (url: string) => Promise<void>;
 
   // Settings, Security & Updates
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
@@ -232,6 +249,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     bookSearchResults: [],
     bookAnnotations: [],
     globalAnnotations: [],
+    pendingJumpAnnotation: null,
     ttsStatuses: [],
     ttsState: "idle",
     ttsChunks: [],
@@ -557,8 +575,8 @@ export const useAppStore = create<AppStore>((set, get) => {
       get().showToast("success", "Vurgu / not kaydedildi.");
     },
 
-    updateAnnotation: async (id, noteText, color) => {
-      await getApiBridge().updateAnnotation(id, noteText, color);
+    updateAnnotation: async (id, noteText, color, highlightStyle) => {
+      await getApiBridge().updateAnnotation(id, noteText, color, highlightStyle);
       const bookId = get().activeBook?.id;
       const [bookNotes, globalNotes] = await Promise.all([
         bookId ? getApiBridge().listAnnotations(bookId) : Promise.resolve([]),
@@ -576,6 +594,36 @@ export const useAppStore = create<AppStore>((set, get) => {
       ]);
       set({ bookAnnotations: bookNotes, globalAnnotations: globalNotes });
     },
+
+    jumpToAnnotation: async (ann) => {
+      const targetBook =
+        get().activeBook?.id === ann.bookId
+          ? get().activeBook
+          : (get().books.find((b) => b.id === ann.bookId) ?? null);
+      if (!targetBook) {
+        get().showToast("error", "Hedef kitap kütüphanede bulunamadı.");
+        return;
+      }
+
+      set({
+        pendingJumpAnnotation: {
+          id: ann.id,
+          spineIndex: ann.spineIndex,
+          startOffset: ann.startOffset,
+          quoteText: ann.quoteText,
+        },
+      });
+
+      if (get().activeBook?.id === targetBook.id && get().activeView === "reader") {
+        if (get().currentChapter?.spineIndex !== ann.spineIndex) {
+          await get().loadChapterIndex(ann.spineIndex);
+        }
+      } else {
+        await get().openBook(targetBook, ann.spineIndex);
+      }
+    },
+
+    clearPendingJumpAnnotation: () => set({ pendingJumpAnnotation: null }),
 
     loadGlobalAnnotations: async (bookId, search) => {
       const notes = await getApiBridge().listAnnotations(bookId, search);
@@ -595,6 +643,18 @@ export const useAppStore = create<AppStore>((set, get) => {
           ? await api.exportNotesMarkdown(bookId, dest)
           : await api.exportNotesJson(bookId, dest);
       get().showToast("success", `${count} not dışa aktarıldı.`);
+    },
+
+    assistSelectedText: async (request) => {
+      return getApiBridge().assistSelectedText(request);
+    },
+
+    openExternalUrl: async (url) => {
+      try {
+        await getApiBridge().openExternalUrl(url);
+      } catch (err) {
+        get().showToast("error", extractErrorMessage(err));
+      }
     },
 
     updateSettings: async (patch) => {

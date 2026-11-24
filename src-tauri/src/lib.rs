@@ -1,3 +1,4 @@
+pub mod assistant;
 pub mod commands;
 pub mod core;
 pub mod error;
@@ -68,6 +69,8 @@ pub fn run() {
             commands::list_ollama_models_cmd,
             commands::get_tts_cache_stats,
             commands::clear_tts_cache,
+            commands::assist_selected_text_cmd,
+            commands::open_external_url_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("ESSVB-Reader başlatılırken hata oluştu");

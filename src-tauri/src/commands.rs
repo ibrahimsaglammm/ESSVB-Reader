@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::assistant::{
+    assist_selected_text, open_external_url, TextAssistRequest, TextAssistResponse,
+};
 use crate::core::epub::{
     get_epub_toc, load_epub_chapter, search_epub_book, BookSearchMatch, ChapterContent, TocItem,
 };
@@ -271,10 +274,14 @@ pub fn update_annotation(
     annotation_id: String,
     note_text: String,
     color: String,
+    highlight_style: Option<String>,
 ) -> Result<(), AppError> {
-    state
-        .db
-        .update_annotation(&annotation_id, &note_text, &color)
+    state.db.update_annotation(
+        &annotation_id,
+        &note_text,
+        &color,
+        highlight_style.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -390,4 +397,18 @@ pub fn get_tts_cache_stats(state: State<'_, AppState>) -> Result<TtsCacheStats, 
 #[tauri::command]
 pub fn clear_tts_cache(state: State<'_, AppState>) -> Result<usize, AppError> {
     state.tts.clear_cache()
+}
+
+#[tauri::command]
+pub async fn assist_selected_text_cmd(
+    state: State<'_, AppState>,
+    request: TextAssistRequest,
+) -> Result<TextAssistResponse, AppError> {
+    let settings = load_settings(&state.db)?;
+    assist_selected_text(&settings, &request).await
+}
+
+#[tauri::command]
+pub fn open_external_url_cmd(url: String) -> Result<(), AppError> {
+    open_external_url(&url)
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { BookOpen, Download, Edit3, Search, Trash2 } from "lucide-react";
 import { translate } from "../../i18n";
 import { useAppStore } from "../../store/useAppStore";
+import { getHighlightToken, getNoteQuoteStyle } from "../../utils/highlights";
 
 export function GlobalNotesView() {
   const lang = useAppStore((s) => s.settings.language);
@@ -12,7 +13,7 @@ export function GlobalNotesView() {
   const updateAnnotation = useAppStore((s) => s.updateAnnotation);
   const deleteAnnotation = useAppStore((s) => s.deleteAnnotation);
   const exportNotes = useAppStore((s) => s.exportNotes);
-  const openBook = useAppStore((s) => s.openBook);
+  const jumpToAnnotation = useAppStore((s) => s.jumpToAnnotation);
 
   const [bookFilter, setBookFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -74,8 +75,18 @@ export function GlobalNotesView() {
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
             {notes.map((ann) => {
               const targetBook = books.find((b) => b.id === ann.bookId);
+              const colorToken = getHighlightToken(ann.color);
               return (
-                <article key={ann.id} className="alert-box">
+                <article
+                  key={ann.id}
+                  className={`alert-box ${targetBook ? "note-card-clickable" : ""}`}
+                  title={targetBook ? translate(lang, "notesJumpHint") : undefined}
+                  onClick={() => {
+                    if (targetBook && editingId !== ann.id) {
+                      void jumpToAnnotation(ann);
+                    }
+                  }}
+                >
                   <div
                     style={{
                       display: "flex",
@@ -85,18 +96,36 @@ export function GlobalNotesView() {
                       flexWrap: "wrap",
                     }}
                   >
-                    <div>
-                      <strong>{ann.bookTitle}</strong>{" "}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span
+                        className="swatch-dot"
+                        style={{
+                          width: "13px",
+                          height: "13px",
+                          backgroundColor: colorToken.swatchHex,
+                        }}
+                      />
+                      <strong>{ann.bookTitle}</strong>
                       <span className="chip">
                         {ann.chapterTitle || `Bölüm ${ann.spineIndex + 1}`}
-                      </span>{" "}
+                      </span>
                       <span className="chip">{ann.color}</span>
                     </div>
                     <div style={{ display: "flex", gap: "6px" }}>
                       {targetBook && (
                         <button
                           type="button"
-                          onClick={() => void openBook(targetBook, ann.spineIndex)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void jumpToAnnotation(ann);
+                          }}
                         >
                           <BookOpen size={14} />
                           {translate(lang, "notesJumpBook")}
@@ -104,7 +133,8 @@ export function GlobalNotesView() {
                       )}
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setEditingId(ann.id);
                           setEditText(ann.noteText);
                         }}
@@ -115,7 +145,10 @@ export function GlobalNotesView() {
                       <button
                         type="button"
                         className="danger"
-                        onClick={() => void deleteAnnotation(ann.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void deleteAnnotation(ann.id);
+                        }}
                       >
                         <Trash2 size={14} />
                         {translate(lang, "deleteShelf")}
@@ -123,18 +156,15 @@ export function GlobalNotesView() {
                     </div>
                   </div>
 
-                  <blockquote
-                    style={{
-                      margin: "8px 0",
-                      paddingLeft: "10px",
-                      borderLeft: "3px solid var(--accent)",
-                    }}
-                  >
+                  <blockquote style={getNoteQuoteStyle(ann.color, ann.highlightStyle)}>
                     {ann.quoteText}
                   </blockquote>
 
                   {editingId === ann.id ? (
-                    <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
+                    <div
+                      style={{ display: "flex", gap: "6px", marginTop: "6px" }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <input
                         type="text"
                         value={editText}
@@ -145,7 +175,7 @@ export function GlobalNotesView() {
                         type="button"
                         className="primary"
                         onClick={() => {
-                          void updateAnnotation(ann.id, editText, ann.color);
+                          void updateAnnotation(ann.id, editText, ann.color, ann.highlightStyle);
                           setEditingId(null);
                         }}
                       >

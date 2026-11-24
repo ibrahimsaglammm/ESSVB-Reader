@@ -52,6 +52,10 @@ pub struct BookDto {
     pub last_opened_at: Option<String>,
 }
 
+fn default_highlight_style() -> String {
+    "solid".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnotationDto {
@@ -63,6 +67,8 @@ pub struct AnnotationDto {
     pub quote_text: String,
     pub note_text: String,
     pub color: String,
+    #[serde(default = "default_highlight_style")]
+    pub highlight_style: String,
     pub start_offset: usize,
     pub end_offset: usize,
     pub created_at: String,
@@ -105,6 +111,8 @@ pub struct CreateAnnotationInput {
     pub quote_text: String,
     pub note_text: String,
     pub color: String,
+    #[serde(default = "default_highlight_style")]
+    pub highlight_style: String,
     pub start_offset: usize,
     pub end_offset: usize,
 }
@@ -201,6 +209,7 @@ impl LibraryDb {
                 quote_text TEXT NOT NULL,
                 note_text TEXT NOT NULL DEFAULT '',
                 color TEXT NOT NULL DEFAULT 'yellow',
+                highlight_style TEXT NOT NULL DEFAULT 'solid',
                 start_offset INTEGER NOT NULL DEFAULT 0,
                 end_offset INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
@@ -216,6 +225,24 @@ impl LibraryDb {
             CREATE INDEX IF NOT EXISTS idx_annotations_book ON annotations(book_id, spine_index);
             ",
         )?;
+
+        let mut has_highlight_style = false;
+        {
+            let mut stmt = conn.prepare("PRAGMA table_info(annotations)")?;
+            let cols = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            for col in cols {
+                if col? == "highlight_style" {
+                    has_highlight_style = true;
+                    break;
+                }
+            }
+        }
+        if !has_highlight_style {
+            conn.execute(
+                "ALTER TABLE annotations ADD COLUMN highlight_style TEXT NOT NULL DEFAULT 'solid'",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -840,6 +867,7 @@ impl LibraryDb {
             return Err(AppError::Validation("Vurgulanacak metin boş olamaz".into()));
         }
         let color = validate_highlight_color(&input.color)?;
+        let highlight_style = validate_highlight_style(&input.highlight_style)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
@@ -859,8 +887,8 @@ impl LibraryDb {
         conn.execute(
             "INSERT INTO annotations (
                 id, book_id, spine_index, chapter_title, quote_text, note_text, color,
-                start_offset, end_offset, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                highlight_style, start_offset, end_offset, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
             params![
                 id,
                 input.book_id,
@@ -869,6 +897,7 @@ impl LibraryDb {
                 quote,
                 input.note_text.trim(),
                 color,
+                highlight_style,
                 input.start_offset as i64,
                 input.end_offset as i64,
                 now
@@ -884,6 +913,7 @@ impl LibraryDb {
             quote_text: quote.to_string(),
             note_text: input.note_text.trim().to_string(),
             color: color.to_string(),
+            highlight_style: highlight_style.to_string(),
             start_offset: input.start_offset,
             end_offset: input.end_offset,
             created_at: now.clone(),
@@ -896,17 +926,28 @@ impl LibraryDb {
         annotation_id: &str,
         note_text: &str,
         color: &str,
+        highlight_style: Option<&str>,
     ) -> Result<(), AppError> {
         let valid_color = validate_highlight_color(color)?;
+        let valid_style = match highlight_style {
+            Some(s) => Some(validate_highlight_style(s)?),
+            None => None,
+        };
         let now = Utc::now().to_rfc3339();
         let conn = self
             .conn
             .lock()
             .map_err(|_| AppError::Database("DB kilidi hatası".into()))?;
-        let changed = conn.execute(
-            "UPDATE annotations SET note_text = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
-            params![note_text.trim(), valid_color, now, annotation_id],
-        )?;
+        let changed = match valid_style {
+            Some(style) => conn.execute(
+                "UPDATE annotations SET note_text = ?1, color = ?2, highlight_style = ?3, updated_at = ?4 WHERE id = ?5",
+                params![note_text.trim(), valid_color, style, now, annotation_id],
+            )?,
+            None => conn.execute(
+                "UPDATE annotations SET note_text = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
+                params![note_text.trim(), valid_color, now, annotation_id],
+            )?,
+        };
         if changed == 0 {
             return Err(AppError::NotFound("Not/vurgu bulunamadı".into()));
         }
@@ -939,7 +980,8 @@ impl LibraryDb {
             .map_err(|_| AppError::Database("DB kilidi hatası".into()))?;
         let mut stmt = conn.prepare(
             "SELECT a.id, a.book_id, b.title, a.spine_index, a.chapter_title, a.quote_text,
-                    a.note_text, a.color, a.start_offset, a.end_offset, a.created_at, a.updated_at
+                    a.note_text, a.color, a.highlight_style, a.start_offset, a.end_offset,
+                    a.created_at, a.updated_at
              FROM annotations a
              INNER JOIN books b ON b.id = a.book_id
              ORDER BY a.created_at DESC",
@@ -954,10 +996,11 @@ impl LibraryDb {
                 quote_text: row.get(5)?,
                 note_text: row.get(6)?,
                 color: row.get(7)?,
-                start_offset: row.get::<_, i64>(8)?.max(0) as usize,
-                end_offset: row.get::<_, i64>(9)?.max(0) as usize,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                highlight_style: row.get(8)?,
+                start_offset: row.get::<_, i64>(9)?.max(0) as usize,
+                end_offset: row.get::<_, i64>(10)?.max(0) as usize,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         })?;
 
@@ -1167,6 +1210,18 @@ fn validate_highlight_color(color: &str) -> Result<&'static str, AppError> {
         "purple" => Ok("purple"),
         _ => Err(AppError::Validation(format!(
             "Geçersiz vurgulama rengi: {color}"
+        ))),
+    }
+}
+
+fn validate_highlight_style(style: &str) -> Result<&'static str, AppError> {
+    match style.trim() {
+        "" | "solid" => Ok("solid"),
+        "underline" => Ok("underline"),
+        "strikethrough" => Ok("strikethrough"),
+        "wavy" => Ok("wavy"),
+        other => Err(AppError::Validation(format!(
+            "Geçersiz vurgulama stili: {other}"
         ))),
     }
 }

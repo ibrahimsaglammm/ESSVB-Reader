@@ -920,9 +920,17 @@ fn fold_turkish_case_with_offsets(input: &str) -> (String, Vec<usize>) {
     (folded, map)
 }
 
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    let mut b = idx.min(s.len());
+    while b > 0 && !s.is_char_boundary(b) {
+        b -= 1;
+    }
+    b
+}
+
 fn build_snippet(text: &str, match_start: usize, match_end: usize) -> String {
-    let safe_start = match_start.min(text.len());
-    let safe_end = match_end.clamp(safe_start, text.len());
+    let safe_start = floor_char_boundary(text, match_start);
+    let safe_end = floor_char_boundary(text, match_end).max(safe_start);
     let before = text[..safe_start]
         .chars()
         .rev()

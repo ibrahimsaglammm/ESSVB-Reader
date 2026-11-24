@@ -14,6 +14,8 @@ import type {
   ImportSummary,
   RestoreBackupResult,
   ShelfDto,
+  TextAssistRequest,
+  TextAssistResponse,
   TextChunk,
   TocItem,
   TtsCacheStats,
@@ -63,7 +65,12 @@ export interface ApiBridge {
   searchBook(bookId: string, query: string): Promise<BookSearchMatch[]>;
   listAnnotations(bookId?: string, search?: string): Promise<AnnotationDto[]>;
   createAnnotation(input: CreateAnnotationInput): Promise<AnnotationDto>;
-  updateAnnotation(annotationId: string, noteText: string, color: string): Promise<void>;
+  updateAnnotation(
+    annotationId: string,
+    noteText: string,
+    color: string,
+    highlightStyle?: string,
+  ): Promise<void>;
   deleteAnnotation(annotationId: string): Promise<void>;
   exportNotesMarkdown(bookId: string | null, destPath: string): Promise<number>;
   exportNotesJson(bookId: string | null, destPath: string): Promise<number>;
@@ -80,6 +87,8 @@ export interface ApiBridge {
   listOllamaModels(baseUrl?: string): Promise<string[]>;
   getTtsCacheStats(): Promise<TtsCacheStats>;
   clearTtsCache(): Promise<number>;
+  assistSelectedText(request: TextAssistRequest): Promise<TextAssistResponse>;
+  openExternalUrl(url: string): Promise<void>;
   pickEpubFiles(): Promise<string[] | null>;
   pickFolder(): Promise<string | null>;
   pickSavePath(
@@ -131,8 +140,13 @@ export const tauriApi: ApiBridge = {
   listAnnotations: (bookId, search) =>
     invoke("list_annotations", { bookId: bookId ?? null, search: search ?? null }),
   createAnnotation: (input) => invoke("create_annotation", { input }),
-  updateAnnotation: (annotationId, noteText, color) =>
-    invoke("update_annotation", { annotationId, noteText, color }),
+  updateAnnotation: (annotationId, noteText, color, highlightStyle) =>
+    invoke("update_annotation", {
+      annotationId,
+      noteText,
+      color,
+      highlightStyle: highlightStyle ?? null,
+    }),
   deleteAnnotation: (annotationId) => invoke("delete_annotation", { annotationId }),
   exportNotesMarkdown: (bookId, destPath) =>
     invoke("export_notes_markdown_cmd", { bookId, destPath }),
@@ -151,6 +165,8 @@ export const tauriApi: ApiBridge = {
   listOllamaModels: (baseUrl) => invoke("list_ollama_models_cmd", { baseUrl: baseUrl ?? null }),
   getTtsCacheStats: () => invoke("get_tts_cache_stats"),
   clearTtsCache: () => invoke("clear_tts_cache"),
+  assistSelectedText: (request) => invoke("assist_selected_text_cmd", { request }),
+  openExternalUrl: (url) => invoke("open_external_url_cmd", { url }),
   pickEpubFiles: async () => {
     const selected = await dialogOpen({
       multiple: true,
@@ -275,7 +291,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
 
   return {
     getVersionInfo: async () => ({
-      version: "0.1.0",
+      version: "0.1.1",
       stageTr: "Hazırlık Aşaması (Ön Sürüm)",
       stageEn: "Development Preview (Pre-release)",
       isPortable: false,
@@ -286,8 +302,8 @@ export function createBrowserPreviewBridge(): ApiBridge {
         throw new Error("NETWORK_DISABLED: Açık kullanıcı onayı gerekli");
       }
       return {
-        currentVersion: "0.1.0",
-        latestVersion: "0.1.0",
+        currentVersion: "0.1.1",
+        latestVersion: "0.1.1",
         updateAvailable: false,
         releaseNotes: "",
         releasePageUrl: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases",
@@ -475,6 +491,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
         quoteText: input.quoteText,
         noteText: input.noteText,
         color: input.color,
+        highlightStyle: input.highlightStyle ?? "solid",
         startOffset: input.startOffset,
         endOffset: input.endOffset,
         createdAt: new Date().toISOString(),
@@ -483,13 +500,15 @@ export function createBrowserPreviewBridge(): ApiBridge {
       annotations = [created, ...annotations];
       return created;
     },
-    updateAnnotation: async (id, noteText, color) => {
+    updateAnnotation: async (id, noteText, color, highlightStyle) => {
       annotations = annotations.map((a) =>
         a.id === id
           ? {
               ...a,
               noteText,
               color: color as AnnotationDto["color"],
+              highlightStyle:
+                (highlightStyle as AnnotationDto["highlightStyle"] | undefined) ?? a.highlightStyle,
               updatedAt: new Date().toISOString(),
             }
           : a,
@@ -580,6 +599,32 @@ export function createBrowserPreviewBridge(): ApiBridge {
       maxBytes: settings.ttsCacheMaxMb * 1024 * 1024,
     }),
     clearTtsCache: async () => 0,
+    assistSelectedText: async (request) => {
+      if (request.mode === "translate") {
+        return {
+          providerUsed: "preview",
+          model: "local-preview",
+          result: `[Önizleme Çeviri (${request.targetLang ?? "tr"})] ${request.text}`,
+        };
+      }
+      if (request.mode === "dictionary") {
+        return {
+          providerUsed: "preview",
+          model: "local-preview",
+          result: `"${request.text}" ifadesi seçili bağlamda temel kavram veya terimi ifade eder.`,
+        };
+      }
+      return {
+        providerUsed: "preview",
+        model: "local-preview",
+        result: `Seçili pasaj özeti (${request.text.slice(0, 60)}...): Ana fikir metnin merkezindeki konuyu vurgular.`,
+      };
+    },
+    openExternalUrl: async (url) => {
+      if (typeof window !== "undefined" && url.startsWith("https://")) {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    },
     pickEpubFiles: async () => null,
     pickFolder: async () => null,
     pickSavePath: async () => null,

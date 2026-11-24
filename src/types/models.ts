@@ -1,5 +1,7 @@
 export type ReadingStatus = "to_read" | "reading" | "finished";
 export type HighlightColor = "yellow" | "green" | "blue" | "pink" | "purple";
+export type HighlightStyle = "solid" | "underline" | "strikethrough" | "wavy";
+export type TextAssistMode = "translate" | "dictionary" | "ask";
 export type ThemePreset = "light" | "dark" | "sepia" | "high-contrast" | "custom";
 export type FontFamily = "serif" | "sans" | "mono";
 export type TextAlign = "left" | "justify";
@@ -137,6 +139,7 @@ export interface AnnotationDto {
   quoteText: string;
   noteText: string;
   color: HighlightColor;
+  highlightStyle: HighlightStyle;
   startOffset: number;
   endOffset: number;
   createdAt: string;
@@ -150,8 +153,24 @@ export interface CreateAnnotationInput {
   quoteText: string;
   noteText: string;
   color: HighlightColor;
+  highlightStyle?: HighlightStyle;
   startOffset: number;
   endOffset: number;
+}
+
+export interface TextAssistRequest {
+  mode: TextAssistMode;
+  text: string;
+  targetLang?: string;
+  userPrompt?: string;
+  provider?: "ollama" | "gemini";
+  cloudConfirmed: boolean;
+}
+
+export interface TextAssistResponse {
+  providerUsed: string;
+  model: string;
+  result: string;
 }
 
 export interface RestoreBackupResult {

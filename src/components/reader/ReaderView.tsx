@@ -17,20 +17,26 @@ import {
 } from "lucide-react";
 import { translate } from "../../i18n";
 import { useAppStore } from "../../store/useAppStore";
-import type { AnnotationDto, FontFamily, HighlightColor, TextAlign } from "../../types/models";
-
-const HIGHLIGHT_CSS_MAP: Record<HighlightColor, string> = {
-  yellow: "rgba(253, 224, 71, 0.55)",
-  green: "rgba(134, 239, 172, 0.55)",
-  blue: "rgba(147, 197, 253, 0.55)",
-  pink: "rgba(249, 168, 212, 0.55)",
-  purple: "rgba(216, 180, 254, 0.55)",
-};
+import type {
+  AnnotationDto,
+  FontFamily,
+  HighlightColor,
+  HighlightStyle,
+  TextAlign,
+} from "../../types/models";
+import {
+  applyHighlightStyleToMark,
+  getHighlightToken,
+  getNoteQuoteStyle,
+} from "../../utils/highlights";
+import { SelectionPopupMenu, type SelectionPopupRect } from "./SelectionPopupMenu";
 
 interface SelectionInfo {
+  spineIndex: number;
   text: string;
   startOffset: number;
   endOffset: number;
+  rect: SelectionPopupRect;
 }
 
 type SidePanel = "none" | "toc" | "search" | "notes" | "typography";
@@ -106,6 +112,7 @@ export function ReaderView() {
   const currentChapter = useAppStore((s) => s.currentChapter);
   const bookSearchResults = useAppStore((s) => s.bookSearchResults);
   const bookAnnotations = useAppStore((s) => s.bookAnnotations);
+  const pendingJumpAnnotation = useAppStore((s) => s.pendingJumpAnnotation);
   const ttsState = useAppStore((s) => s.ttsState);
   const ttsChunks = useAppStore((s) => s.ttsChunks);
   const ttsChunkIndex = useAppStore((s) => s.ttsChunkIndex);
@@ -115,11 +122,17 @@ export function ReaderView() {
   const ttsPendingConsentText = useAppStore((s) => s.ttsPendingConsentText);
 
   const setActiveView = useAppStore((s) => s.setActiveView);
+  const openSettings = useAppStore((s) => s.openSettings);
+  const showToast = useAppStore((s) => s.showToast);
   const loadChapterIndex = useAppStore((s) => s.loadChapterIndex);
   const saveReaderProgress = useAppStore((s) => s.saveReaderProgress);
   const searchInBook = useAppStore((s) => s.searchInBook);
   const createAnnotation = useAppStore((s) => s.createAnnotation);
   const deleteAnnotation = useAppStore((s) => s.deleteAnnotation);
+  const jumpToAnnotation = useAppStore((s) => s.jumpToAnnotation);
+  const clearPendingJumpAnnotation = useAppStore((s) => s.clearPendingJumpAnnotation);
+  const assistSelectedText = useAppStore((s) => s.assistSelectedText);
+  const openExternalUrl = useAppStore((s) => s.openExternalUrl);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const speakText = useAppStore((s) => s.speakText);
   const confirmGeminiSpeak = useAppStore((s) => s.confirmGeminiSpeak);
@@ -132,15 +145,15 @@ export function ReaderView() {
 
   const lang = settings.language;
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const frameWrapRef = useRef<HTMLDivElement | null>(null);
   const scrollTimerRef = useRef<number | null>(null);
   const restoredForBookRef = useRef<string | null>(null);
 
   const [panel, setPanel] = useState<SidePanel>("none");
   const [searchQuery, setSearchQuery] = useState("");
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
-  const [noteMode, setNoteMode] = useState(false);
-  const [noteDraft, setNoteDraft] = useState("");
   const [selectedColor, setSelectedColor] = useState<HighlightColor>("yellow");
+  const [selectedStyle, setSelectedStyle] = useState<HighlightStyle>("solid");
 
   const applyAnnotationsToIframe = useCallback(
     (doc: Document, annotations: AnnotationDto[], spineIdx: number) => {
@@ -159,7 +172,7 @@ export function ReaderView() {
           ann.startOffset,
           ann.endOffset,
           "essvb-highlight",
-          HIGHLIGHT_CSS_MAP[ann.color] ?? HIGHLIGHT_CSS_MAP.yellow,
+          undefined,
           ann.id,
         );
         if (!marked && doc.body?.textContent) {
@@ -170,15 +183,47 @@ export function ReaderView() {
               idx,
               idx + ann.quoteText.length,
               "essvb-highlight",
-              HIGHLIGHT_CSS_MAP[ann.color] ?? HIGHLIGHT_CSS_MAP.yellow,
+              undefined,
               ann.id,
             );
           }
         }
-        void marked;
+        if (marked) {
+          applyHighlightStyleToMark(marked, ann.color, ann.highlightStyle);
+        }
       }
     },
     [],
+  );
+
+  const scrollAndPulseAnnotation = useCallback(
+    (
+      doc: Document,
+      target: { id: string; spineIndex: number; startOffset: number; quoteText: string },
+    ) => {
+      let mark = doc.querySelector<HTMLElement>(`mark.essvb-highlight[data-ann-id="${target.id}"]`);
+      if (!mark && doc.body?.textContent) {
+        const idx = doc.body.textContent.indexOf(target.quoteText);
+        const start = idx >= 0 ? idx : target.startOffset;
+        mark = wrapTextRangeInDoc(
+          doc,
+          start,
+          start + Math.max(1, target.quoteText.length),
+          "essvb-highlight",
+          undefined,
+          target.id,
+        );
+      }
+      if (mark) {
+        mark.scrollIntoView({ block: "center", behavior: "smooth" });
+        mark.classList.add("essvb-highlight-pulse");
+        window.setTimeout(() => {
+          mark?.classList.remove("essvb-highlight-pulse");
+        }, 1800);
+      }
+      clearPendingJumpAnnotation();
+    },
+    [clearPendingJumpAnnotation],
   );
 
   // Sync active TTS sentence highlight inside the sandboxed chapter iframe
@@ -216,23 +261,26 @@ export function ReaderView() {
 
     applyAnnotationsToIframe(doc, bookAnnotations, currentChapter.spineIndex);
 
-    // Restore scroll offset once when opening the book
-    const restoreKey = `${activeBook.id}:${currentChapter.spineIndex}`;
-    if (
-      restoredForBookRef.current !== restoreKey &&
-      activeBook.lastSpineIndex === currentChapter.spineIndex &&
-      activeBook.lastScrollOffset > 0
-    ) {
-      restoredForBookRef.current = restoreKey;
-      const maxScroll = Math.max(0, doc.documentElement.scrollHeight - iframe.clientHeight);
-      doc.defaultView?.scrollTo(0, maxScroll * activeBook.lastScrollOffset);
+    if (pendingJumpAnnotation && pendingJumpAnnotation.spineIndex === currentChapter.spineIndex) {
+      scrollAndPulseAnnotation(doc, pendingJumpAnnotation);
+    } else {
+      // Restore scroll offset once when opening the book
+      const restoreKey = `${activeBook.id}:${currentChapter.spineIndex}`;
+      if (
+        restoredForBookRef.current !== restoreKey &&
+        activeBook.lastSpineIndex === currentChapter.spineIndex &&
+        activeBook.lastScrollOffset > 0
+      ) {
+        restoredForBookRef.current = restoreKey;
+        const maxScroll = Math.max(0, doc.documentElement.scrollHeight - iframe.clientHeight);
+        doc.defaultView?.scrollTo(0, maxScroll * activeBook.lastScrollOffset);
+      }
     }
 
     const updateSelectionFromDoc = () => {
       const sel = doc.getSelection();
       if (!sel || sel.isCollapsed) {
         setSelection(null);
-        setNoteMode(false);
         return;
       }
       const txt = sel.toString().trim();
@@ -242,7 +290,24 @@ export function ReaderView() {
       }
       const range = sel.getRangeAt(0);
       const { start, end } = computeDomTextOffsets(doc, range);
-      setSelection({ text: txt, startOffset: start, endOffset: end });
+      const rangeRect = range.getBoundingClientRect();
+      const iframeRect = iframe.getBoundingClientRect();
+      const wrapRect = frameWrapRef.current?.getBoundingClientRect() ?? iframeRect;
+      const offsetLeft = iframeRect.left - wrapRect.left;
+      const offsetTop = iframeRect.top - wrapRect.top;
+      setSelection({
+        spineIndex: currentChapter.spineIndex,
+        text: txt,
+        startOffset: start,
+        endOffset: end,
+        rect: {
+          left: offsetLeft + rangeRect.left + rangeRect.width / 2,
+          top: offsetTop + rangeRect.top,
+          bottom: offsetTop + rangeRect.bottom,
+          containerWidth: wrapRect.width || iframe.clientWidth || 720,
+          containerHeight: wrapRect.height || iframe.clientHeight || 540,
+        },
+      });
     };
 
     const handleScroll = () => {
@@ -259,14 +324,42 @@ export function ReaderView() {
     doc.addEventListener("mouseup", updateSelectionFromDoc);
     doc.addEventListener("keyup", updateSelectionFromDoc);
     doc.defaultView?.addEventListener("scroll", handleScroll, { passive: true });
-  }, [activeBook, applyAnnotationsToIframe, bookAnnotations, currentChapter, saveReaderProgress]);
+  }, [
+    activeBook,
+    applyAnnotationsToIframe,
+    bookAnnotations,
+    currentChapter,
+    pendingJumpAnnotation,
+    saveReaderProgress,
+    scrollAndPulseAnnotation,
+  ]);
 
   useEffect(() => {
     const doc = iframeRef.current?.contentDocument;
     if (doc && currentChapter) {
       applyAnnotationsToIframe(doc, bookAnnotations, currentChapter.spineIndex);
+      if (pendingJumpAnnotation && pendingJumpAnnotation.spineIndex === currentChapter.spineIndex) {
+        scrollAndPulseAnnotation(doc, pendingJumpAnnotation);
+      }
     }
-  }, [bookAnnotations, currentChapter, applyAnnotationsToIframe]);
+  }, [
+    bookAnnotations,
+    currentChapter,
+    pendingJumpAnnotation,
+    applyAnnotationsToIframe,
+    scrollAndPulseAnnotation,
+  ]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelection(null);
+        iframeRef.current?.contentDocument?.getSelection()?.removeAllRanges();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   if (!activeBook || !currentChapter) {
     return (
@@ -279,22 +372,63 @@ export function ReaderView() {
     );
   }
 
-  const handleCreateHighlight = async (color: HighlightColor, withNote: boolean) => {
-    if (!selection) return;
+  const activeSelection =
+    selection && selection.spineIndex === currentChapter.spineIndex ? selection : null;
+
+  const handleCreateAnnotation = async (
+    color: HighlightColor,
+    style: HighlightStyle,
+    noteText = "",
+  ) => {
+    if (!activeSelection) return;
     await createAnnotation({
       bookId: activeBook.id,
       spineIndex: currentChapter.spineIndex,
       chapterTitle: currentChapter.title,
-      quoteText: selection.text,
-      noteText: withNote ? noteDraft.trim() : "",
+      quoteText: activeSelection.text,
+      noteText: noteText.trim(),
       color,
-      startOffset: selection.startOffset,
-      endOffset: selection.endOffset,
+      highlightStyle: style,
+      startOffset: activeSelection.startOffset,
+      endOffset: activeSelection.endOffset,
     });
     setSelection(null);
-    setNoteMode(false);
-    setNoteDraft("");
     iframeRef.current?.contentDocument?.getSelection()?.removeAllRanges();
+  };
+
+  const handleCopySelection = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("success", translate(lang, "copiedToClipboard"));
+    } catch {
+      showToast("error", "Pano erişimi başarısız.");
+    }
+  };
+
+  const handleSearchInBookSelection = async (text: string) => {
+    const query = text.trim().slice(0, 120);
+    setSearchQuery(query);
+    setPanel("search");
+    await searchInBook(query);
+  };
+
+  const handleSearchWebSelection = async (text: string) => {
+    const q = encodeURIComponent(text.trim().slice(0, 200));
+    await openExternalUrl(`https://duckduckgo.com/?q=${q}`);
+  };
+
+  const handleReadFromHere = async () => {
+    if (!activeSelection) return;
+    const bodyText = iframeRef.current?.contentDocument?.body?.textContent ?? "";
+    let slice = "";
+    if (bodyText && activeSelection.startOffset < bodyText.length) {
+      slice = bodyText.slice(activeSelection.startOffset).trim();
+    }
+    if (!slice) {
+      const idx = currentChapter.plainText.indexOf(activeSelection.text);
+      slice = idx >= 0 ? currentChapter.plainText.slice(idx) : activeSelection.text;
+    }
+    await speakText(slice.slice(0, 4500));
   };
 
   return (
@@ -383,74 +517,6 @@ export function ReaderView() {
         </div>
       </div>
 
-      {/* Text Selection Action Toolbar */}
-      <div
-        className="selection-toolbar"
-        role="toolbar"
-        aria-label={translate(lang, "selectionHighlight")}
-      >
-        {selection ? (
-          <>
-            <span style={{ fontSize: "12px", color: "var(--muted)" }}>
-              &ldquo;{selection.text.slice(0, 48)}
-              {selection.text.length > 48 ? "..." : ""}&rdquo;
-            </span>
-            {(Object.keys(HIGHLIGHT_CSS_MAP) as HighlightColor[]).map((color) => (
-              <button
-                key={color}
-                type="button"
-                className="color-dot"
-                style={{ backgroundColor: HIGHLIGHT_CSS_MAP[color] }}
-                title={`${translate(lang, "selectionHighlight")} (${color})`}
-                aria-label={`${translate(lang, "selectionHighlight")}: ${color}`}
-                onClick={() => {
-                  setSelectedColor(color);
-                  void handleCreateHighlight(color, false);
-                }}
-              />
-            ))}
-            <button
-              type="button"
-              onClick={() => setNoteMode((v) => !v)}
-              data-testid="selection-add-note-btn"
-            >
-              {translate(lang, "selectionAddNote")}
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => void speakText(selection.text)}
-              data-testid="selection-speak-btn"
-            >
-              <Volume2 size={14} />
-              {translate(lang, "selectionSpeak")}
-            </button>
-            {noteMode && (
-              <div style={{ display: "flex", gap: "6px", width: "100%", marginTop: "4px" }}>
-                <input
-                  type="text"
-                  value={noteDraft}
-                  onChange={(e) => setNoteDraft(e.target.value)}
-                  placeholder={translate(lang, "notePlaceholder")}
-                  style={{ flex: 1 }}
-                />
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => void handleCreateHighlight(selectedColor, true)}
-                >
-                  {translate(lang, "saveNote")}
-                </button>
-              </div>
-            )}
-          </>
-        ) : (
-          <span style={{ fontSize: "12px", color: "var(--muted)" }}>
-            {translate(lang, "readerSelectTextHint")}
-          </span>
-        )}
-      </div>
-
       {/* Main Reader Workspace */}
       <div className="reader-workspace">
         {panel !== "none" && (
@@ -531,19 +597,68 @@ export function ReaderView() {
                 <h3 style={{ margin: 0 }}>{translate(lang, "readerNotes")}</h3>
                 <div className="sidebar-list">
                   {bookAnnotations.map((ann) => (
-                    <div key={ann.id} className="alert-box">
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: "6px" }}>
-                        <strong style={{ fontSize: "12px" }}>{ann.chapterTitle}</strong>
+                    <div
+                      key={ann.id}
+                      className="alert-box note-card-clickable"
+                      role="button"
+                      tabIndex={0}
+                      title={translate(lang, "notesJumpHint")}
+                      onClick={() => void jumpToAnnotation(ann)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          void jumpToAnnotation(ann);
+                        }
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: "6px",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div
+                          style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}
+                        >
+                          <span
+                            className="swatch-dot"
+                            style={{
+                              width: "12px",
+                              height: "12px",
+                              backgroundColor: getHighlightToken(ann.color).swatchHex,
+                              flexShrink: 0,
+                            }}
+                          />
+                          <strong
+                            style={{
+                              fontSize: "12px",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {ann.chapterTitle || `Bölüm ${ann.spineIndex + 1}`}
+                          </strong>
+                        </div>
                         <button
                           type="button"
                           className="icon-btn danger"
                           aria-label={translate(lang, "deleteShelf")}
-                          onClick={() => void deleteAnnotation(ann.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deleteAnnotation(ann.id);
+                          }}
                         >
                           <Trash2 size={12} />
                         </button>
                       </div>
-                      <blockquote style={{ margin: "6px 0", fontSize: "12px" }}>
+                      <blockquote
+                        style={{
+                          ...getNoteQuoteStyle(ann.color, ann.highlightStyle),
+                          fontSize: "12px",
+                        }}
+                      >
                         {ann.quoteText}
                       </blockquote>
                       {ann.noteText && (
@@ -632,7 +747,7 @@ export function ReaderView() {
         )}
 
         {/* Strict Sandboxed Chapter Frame (NO allow-scripts!) */}
-        <div className="reader-frame-wrap">
+        <div className="reader-frame-wrap" ref={frameWrapRef}>
           <iframe
             ref={iframeRef}
             className="reader-iframe"
@@ -642,6 +757,35 @@ export function ReaderView() {
             onLoad={handleIframeLoad}
             data-testid="reader-sandbox-iframe"
           />
+
+          {activeSelection && (
+            <SelectionPopupMenu
+              lang={lang}
+              settings={settings}
+              selectedText={activeSelection.text}
+              rect={activeSelection.rect}
+              selectedColor={selectedColor}
+              selectedStyle={selectedStyle}
+              onSelectColor={setSelectedColor}
+              onSelectStyle={setSelectedStyle}
+              onHighlight={(color, style) => handleCreateAnnotation(color, style, "")}
+              onSaveNote={(noteText, color, style) =>
+                handleCreateAnnotation(color, style, noteText)
+              }
+              onCopy={handleCopySelection}
+              onSearchInBook={handleSearchInBookSelection}
+              onSearchWeb={handleSearchWebSelection}
+              onOpenExternalUrl={openExternalUrl}
+              onSpeakSelected={(text) => speakText(text)}
+              onReadFromHere={handleReadFromHere}
+              onAssistText={assistSelectedText}
+              onOpenSettings={() => openSettings("general")}
+              onClose={() => {
+                setSelection(null);
+                iframeRef.current?.contentDocument?.getSelection()?.removeAllRanges();
+              }}
+            />
+          )}
         </div>
       </div>
 
