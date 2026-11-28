@@ -9,9 +9,9 @@ export const en: Record<TranslationKey, string> = {
   navNotes: "Notes & Highlights",
   navSettings: "Settings",
   navAbout: "About",
-  openBookFiles: "Add Books (.epub)",
+  openBookFiles: "Add Books",
   openBookFolder: "Import Folder",
-  dropHint: "Drag and drop .epub files here to import",
+  dropHint: "Drag and drop EPUB, PDF, DOCX, or DOC files here to import",
   updateBannerTitle: "ESSVB-Reader v{{version}} — Update Check",
   updateBannerDesc:
     "You are running a pre-release build. Out of privacy, no external network connection is made without your consent. Check for updates now?",

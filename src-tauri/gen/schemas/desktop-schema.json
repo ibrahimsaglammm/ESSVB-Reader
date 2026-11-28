@@ -2283,6 +2283,12 @@
           "markdownDescription": "Denies the save command without any pre-configured scope."
         },
         {
+          "description": "Enables the copy_content_uri command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:allow-copy-content-uri",
+          "markdownDescription": "Enables the copy_content_uri command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_info command without any pre-configured scope.",
           "type": "string",
           "const": "essvb-tts:allow-get-info",
@@ -2317,6 +2323,12 @@
           "type": "string",
           "const": "essvb-tts:allow-update-now-playing",
           "markdownDescription": "Enables the update_now_playing command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the copy_content_uri command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:deny-copy-content-uri",
+          "markdownDescription": "Denies the copy_content_uri command without any pre-configured scope."
         },
         {
           "description": "Denies the get_info command without any pre-configured scope.",

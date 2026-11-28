@@ -124,21 +124,57 @@ fn format_pdf_page_html(page_num: u32, raw_text: &str) -> String {
 
 pub fn parse_pdf_metadata(path: &Path) -> Result<ParsedEpub, AppError> {
     validate_pdf_header(path)?;
-    let doc = Document::load(path)
-        .map_err(|e| AppError::Archive(format!("PDF dosyası ayrıştırılamadı: {e}")))?;
-
-    let page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
-    if page_numbers.is_empty() {
-        return Err(AppError::Validation(
-            "PDF belgesi hiç sayfa içermiyor".to_string(),
-        ));
-    }
-
     let fallback_title = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Adsız PDF")
         .to_string();
+
+    let Ok(doc) = Document::load(path) else {
+        // Visually rendered natively via pdfjs-dist even when compressed XRef streams resist lopdf
+        return Ok(ParsedEpub {
+            title: fallback_title,
+            author: "PDF Belgesi".to_string(),
+            language: "tr".to_string(),
+            publisher: String::new(),
+            description: String::new(),
+            series: String::new(),
+            genre: "PDF".to_string(),
+            epub_version: "PDF".to_string(),
+            cover_bytes: None,
+            spine_count: 1,
+            toc: vec![TocItem {
+                id: "pdf-page-1".to_string(),
+                title: "Sayfa 1".to_string(),
+                href: "page-1".to_string(),
+                spine_index: Some(0),
+                depth: 0,
+            }],
+        });
+    };
+
+    let page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
+    if page_numbers.is_empty() {
+        return Ok(ParsedEpub {
+            title: fallback_title,
+            author: "PDF Belgesi".to_string(),
+            language: "tr".to_string(),
+            publisher: String::new(),
+            description: String::new(),
+            series: String::new(),
+            genre: "PDF".to_string(),
+            epub_version: "PDF".to_string(),
+            cover_bytes: None,
+            spine_count: 1,
+            toc: vec![TocItem {
+                id: "pdf-page-1".to_string(),
+                title: "Sayfa 1".to_string(),
+                href: "page-1".to_string(),
+                spine_index: Some(0),
+                depth: 0,
+            }],
+        });
+    }
 
     let title = extract_info_field(&doc, b"Title").unwrap_or(fallback_title);
     let author = extract_info_field(&doc, b"Author").unwrap_or_else(|| "Bilinmeyen Yazar".into());
@@ -177,9 +213,13 @@ pub fn get_pdf_toc(path: &Path) -> Result<Vec<TocItem>, AppError> {
 
 pub fn pdf_spine_char_counts(path: &Path) -> Result<Vec<usize>, AppError> {
     validate_pdf_header(path)?;
-    let doc = Document::load(path)
-        .map_err(|e| AppError::Archive(format!("PDF dosyası ayrıştırılamadı: {e}")))?;
+    let Ok(doc) = Document::load(path) else {
+        return Ok(vec![1]);
+    };
     let page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
+    if page_numbers.is_empty() {
+        return Ok(vec![1]);
+    }
     let counts = page_numbers
         .into_iter()
         .map(|p| {
@@ -197,15 +237,30 @@ pub fn load_pdf_chapter(
     theme_css: &str,
 ) -> Result<ChapterContent, AppError> {
     validate_pdf_header(path)?;
-    let doc = Document::load(path)
-        .map_err(|e| AppError::Archive(format!("PDF dosyası açılamadı: {e}")))?;
+    let Ok(doc) = Document::load(path) else {
+        return Ok(ChapterContent {
+            spine_index: 0,
+            chapter_count: 1,
+            title: "PDF Belgesi".to_string(),
+            src_doc: String::new(),
+            body_html: String::new(),
+            plain_text: String::new(),
+        });
+    };
     let page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
+    if page_numbers.is_empty() {
+        return Ok(ChapterContent {
+            spine_index: 0,
+            chapter_count: 1,
+            title: "PDF Belgesi".to_string(),
+            src_doc: String::new(),
+            body_html: String::new(),
+            plain_text: String::new(),
+        });
+    }
     let chapter_count = page_numbers.len();
-    let &page_num = page_numbers.get(spine_index).ok_or_else(|| {
-        AppError::Validation(format!(
-            "Geçersiz PDF sayfa indeksi: {spine_index} (toplam {chapter_count})"
-        ))
-    })?;
+    let safe_idx = spine_index.min(chapter_count.saturating_sub(1));
+    let page_num = page_numbers[safe_idx];
 
     let extracted = doc.extract_text(&[page_num]).unwrap_or_default();
     let raw_html = format_pdf_page_html(page_num, &extracted);
@@ -213,7 +268,7 @@ pub fn load_pdf_chapter(
         sanitize_chapter_html(&raw_html, &mut |_| Ok(None), &mut |_| Ok(None), theme_css)?;
 
     Ok(ChapterContent {
-        spine_index,
+        spine_index: safe_idx,
         chapter_count,
         title: format!("Sayfa {page_num}"),
         src_doc: sanitized.src_doc,

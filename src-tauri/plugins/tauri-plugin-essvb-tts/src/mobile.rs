@@ -4,7 +4,10 @@ use tauri::{
     AppHandle, Runtime,
 };
 
-use crate::models::{MobileTtsInfo, NowPlayingRequest, SpeakChunkRequest, SpeakChunkResponse};
+use crate::models::{
+    CopyContentUriRequest, CopyContentUriResponse, MobileTtsInfo, NowPlayingRequest,
+    SpeakChunkRequest, SpeakChunkResponse,
+};
 
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_essvb_tts);
@@ -48,6 +51,15 @@ impl<R: Runtime> EssvbTts<R> {
     pub fn update_now_playing(&self, payload: NowPlayingRequest) -> crate::Result<()> {
         self.0
             .run_mobile_plugin("update_now_playing", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn copy_content_uri(
+        &self,
+        payload: CopyContentUriRequest,
+    ) -> crate::Result<CopyContentUriResponse> {
+        self.0
+            .run_mobile_plugin("copy_content_uri", payload)
             .map_err(Into::into)
     }
 }

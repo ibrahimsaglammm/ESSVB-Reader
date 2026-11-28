@@ -1,5 +1,5 @@
 /* global self, caches, URL, fetch */
-const CACHE_NAME = "essvb-pwa-v0.2.1";
+const CACHE_NAME = "essvb-pwa-v0.2.2";
 const APP_SHELL = [
   "./",
   "./index.html",

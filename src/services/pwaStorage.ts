@@ -23,6 +23,7 @@ export interface StoredBookPayload {
   toc: TocItem[];
   pageMap: number[];
   chapters: StoredChapterEntry[];
+  pdfBytes?: Uint8Array;
 }
 
 export interface PwaKvSnapshot {

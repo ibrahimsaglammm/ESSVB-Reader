@@ -14,7 +14,7 @@ export function UpdatePromptBanner() {
   const openSettings = useAppStore((s) => s.openSettings);
 
   const lang = settings.language;
-  const version = versionInfo?.version ?? "0.1.0";
+  const version = versionInfo?.version ?? "0.2.2";
 
   if (!settings.askUpdateOnStartup || dismissed) {
     return null;

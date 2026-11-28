@@ -1,6 +1,6 @@
 {
   "name": "essvb-reader",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "ESSVB-Reader - Privacy-first, zero-telemetry cross-platform EPUB reader",
@@ -24,6 +24,7 @@
     "@tauri-apps/api": "2.12.5",
     "@tauri-apps/plugin-dialog": "2.8.4",
     "lucide-react": "0.553.0",
+    "pdfjs-dist": "6.5.438",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "zustand": "5.0.8"

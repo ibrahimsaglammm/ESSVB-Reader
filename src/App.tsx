@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { BookOpen, Info, Library, NotebookPen, Settings } from "lucide-react";
+import { BookOpen, ExternalLink, Info, Library, NotebookPen, Settings, X } from "lucide-react";
 import { translate } from "./i18n";
+import { isTauriRuntime } from "./services/tauriBridge";
 import { useAppStore } from "./store/useAppStore";
 import { UpdatePromptBanner } from "./components/common/UpdatePromptBanner";
 import { UpdateAvailableModal } from "./components/common/UpdateAvailableModal";
@@ -14,6 +15,7 @@ export function App() {
   const versionInfo = useAppStore((s) => s.versionInfo);
   const activeView = useAppStore((s) => s.activeView);
   const activeBook = useAppStore((s) => s.activeBook);
+  const openBookTabs = useAppStore((s) => s.openBookTabs);
   const currentChapter = useAppStore((s) => s.currentChapter);
   const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
   const toast = useAppStore((s) => s.toast);
@@ -32,9 +34,12 @@ export function App() {
   const pauseTts = useAppStore((s) => s.pauseTts);
   const resumeTts = useAppStore((s) => s.resumeTts);
   const clearToast = useAppStore((s) => s.clearToast);
+  const switchBookTab = useAppStore((s) => s.switchBookTab);
+  const closeBookTab = useAppStore((s) => s.closeBookTab);
+  const openBookInNewWindow = useAppStore((s) => s.openBookInNewWindow);
 
   const lang = settings.language;
-  const version = versionInfo?.version ?? "0.2.1";
+  const version = versionInfo?.version ?? "0.2.2";
 
   useEffect(() => {
     void initialize();
@@ -186,6 +191,62 @@ export function App() {
           </button>
         </nav>
       </header>
+
+      {openBookTabs.length > 0 && (
+        <div
+          className="book-tabbar"
+          role="tablist"
+          aria-label="Açık Kitap Sekmeleri"
+          data-testid="book-tabbar"
+        >
+          {openBookTabs.map((tab) => {
+            const isActive = activeView === "reader" && activeBook?.id === tab.bookId;
+            return (
+              <div
+                key={tab.bookId}
+                className={`book-tab ${isActive ? "active" : ""}`}
+                role="tab"
+                aria-selected={isActive}
+              >
+                <button
+                  type="button"
+                  className="book-tab-title"
+                  onClick={() => void switchBookTab(tab.bookId)}
+                  title={tab.title}
+                >
+                  <BookOpen size={13} aria-hidden="true" />
+                  <span>{tab.title}</span>
+                </button>
+                {isTauriRuntime() && (
+                  <button
+                    type="button"
+                    className="book-tab-action"
+                    title="Yeni Pencerede Aç"
+                    aria-label={`Yeni Pencerede Aç: ${tab.title}`}
+                    onClick={() =>
+                      void openBookInNewWindow({
+                        id: tab.bookId,
+                        title: tab.title,
+                      } as Parameters<typeof openBookInNewWindow>[0])
+                    }
+                  >
+                    <ExternalLink size={12} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="book-tab-close"
+                  title="Sekmeyi Kapat"
+                  aria-label={`Sekmeyi Kapat: ${tab.title}`}
+                  onClick={() => closeBookTab(tab.bookId)}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <UpdatePromptBanner />
 

@@ -5,7 +5,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use tauri::{AppHandle, State};
 use tauri_plugin_essvb_tts::{
-    EssvbTtsExt, MobileTtsInfo, NowPlayingRequest, SpeakChunkRequest, SpeakChunkResponse,
+    CopyContentUriRequest, EssvbTtsExt, MobileTtsInfo, NowPlayingRequest, SpeakChunkRequest,
+    SpeakChunkResponse,
 };
 use uuid::Uuid;
 
@@ -84,13 +85,69 @@ pub async fn download_and_apply_update_cmd(
 
 #[tauri::command]
 pub async fn import_epub_files(
+    app: AppHandle,
     state: State<'_, AppState>,
     paths: Vec<String>,
 ) -> Result<ImportSummary, AppError> {
+    let mut resolved_paths: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    let mut staged_temps: Vec<PathBuf> = Vec::new();
+    let mut stage_failures: Vec<String> = Vec::new();
+
+    for raw in paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("content://") || trimmed.starts_with("file://") {
+            match app.essvb_tts().copy_content_uri(CopyContentUriRequest {
+                uri: trimmed.to_string(),
+            }) {
+                Ok(staged) => {
+                    let p = PathBuf::from(&staged.path);
+                    staged_temps.push(p.clone());
+                    resolved_paths.push(p);
+                }
+                Err(e) => {
+                    stage_failures.push(format!("{trimmed}: {e}"));
+                }
+            }
+        } else {
+            resolved_paths.push(PathBuf::from(trimmed));
+        }
+    }
+
+    let db = Arc::clone(&state.db);
+    let mut summary = tokio::task::spawn_blocking(move || {
+        let out = db.import_epub_paths(&resolved_paths);
+        for tmp in staged_temps {
+            let _ = std::fs::remove_file(tmp);
+        }
+        out
+    })
+    .await
+    .map_err(|e| AppError::Io(e.to_string()))??;
+
+    summary.failed.extend(stage_failures);
+    Ok(summary)
+}
+
+#[tauri::command]
+pub async fn get_book_file_base64(
+    state: State<'_, AppState>,
+    book_id: String,
+) -> Result<String, AppError> {
+    const MAX_FILE_BYTES: u64 = 150 * 1024 * 1024;
     let db = Arc::clone(&state.db);
     tokio::task::spawn_blocking(move || {
-        let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-        db.import_epub_paths(&path_bufs)
+        let path = db.get_book_epub_path(&book_id)?;
+        let meta = std::fs::metadata(&path)?;
+        if meta.len() > MAX_FILE_BYTES {
+            return Err(AppError::Security(
+                "Belge boyutu güvenlik sınırını aşıyor".into(),
+            ));
+        }
+        let bytes = std::fs::read(&path)?;
+        Ok(BASE64_STANDARD.encode(bytes))
     })
     .await
     .map_err(|e| AppError::Io(e.to_string()))?

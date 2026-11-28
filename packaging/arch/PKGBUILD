@@ -1,6 +1,6 @@
 # Maintainer: ESSVB-Reader Contributors
 pkgname=essvb-reader
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc="Güvenli, telemetrisiz, sandbox korumalı çapraz platform EPUB, PDF ve DOC/DOCX okuyucu"
 arch=('x86_64')

@@ -5,13 +5,16 @@ import {
   BookOpen,
   Check,
   Edit3,
+  ExternalLink,
   FolderPlus,
   GripVertical,
+  PanelLeft,
   Plus,
   Search,
   Tag,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { translate } from "../../i18n";
 import { isTauriRuntime } from "../../services/tauriBridge";
@@ -43,10 +46,14 @@ export function LibraryView() {
   const bulkSetStatus = useAppStore((s) => s.bulkSetStatus);
   const deleteBooks = useAppStore((s) => s.deleteBooks);
   const openBook = useAppStore((s) => s.openBook);
+  const openBookInNewWindow = useAppStore((s) => s.openBookInNewWindow);
   const updateSettings = useAppStore((s) => s.updateSettings);
 
   const lang = settings.language;
 
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth > 900 : true,
+  );
   const [newShelfName, setNewShelfName] = useState("");
   const [renamingShelfId, setRenamingShelfId] = useState<string | null>(null);
   const [renameShelfText, setRenameShelfText] = useState("");
@@ -179,8 +186,30 @@ export function LibraryView() {
 
   return (
     <div className="main-body" data-testid="library-view">
+      {sidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          aria-hidden="true"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Left Navigation Sidebar */}
-      <aside className="library-sidebar" aria-label={translate(lang, "shelvesTitle")}>
+      <aside
+        className={`library-sidebar ${sidebarOpen ? "open" : "collapsed"}`}
+        aria-label={translate(lang, "shelvesTitle")}
+      >
+        <div className="sidebar-mobile-header">
+          <strong>{translate(lang, "shelvesTitle")}</strong>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setSidebarOpen(false)}
+            aria-label={translate(lang, "close")}
+          >
+            <X size={15} />
+          </button>
+        </div>
         <div className="sidebar-section">
           <h3>{translate(lang, "allBooks")}</h3>
           <div className="sidebar-list">
@@ -405,7 +434,18 @@ export function LibraryView() {
       {/* Main List/Table Area */}
       <section className="library-main">
         <div className="library-toolbar">
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: "1 1 240px" }}>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setSidebarOpen((o) => !o)}
+            aria-label={translate(lang, "shelvesTitle")}
+            title={translate(lang, "shelvesTitle")}
+            data-testid="toggle-sidebar-btn"
+          >
+            <PanelLeft size={16} />
+          </button>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: "1 1 200px" }}>
             <Search size={16} aria-hidden="true" />
             <input
               type="text"
@@ -582,10 +622,10 @@ export function LibraryView() {
                   {settings.showCoverThumbnails && <th style={{ width: "44px" }} />}
                   <th>{translate(lang, "colTitle")}</th>
                   <th>{translate(lang, "colAuthor")}</th>
-                  <th>{translate(lang, "colSeries")}</th>
-                  <th>{translate(lang, "colGenre")}</th>
-                  <th>{translate(lang, "colTags")}</th>
-                  <th>{translate(lang, "colShelves")}</th>
+                  <th className="col-hide-mobile">{translate(lang, "colSeries")}</th>
+                  <th className="col-hide-mobile">{translate(lang, "colGenre")}</th>
+                  <th className="col-hide-mobile">{translate(lang, "colTags")}</th>
+                  <th className="col-hide-mobile">{translate(lang, "colShelves")}</th>
                   <th>{translate(lang, "colStatus")}</th>
                   <th>{translate(lang, "colProgress")}</th>
                   <th>{translate(lang, "colActions")}</th>
@@ -647,9 +687,9 @@ export function LibraryView() {
                       </button>
                     </td>
                     <td>{book.author}</td>
-                    <td>{book.series || "—"}</td>
-                    <td>{book.genre || "—"}</td>
-                    <td>
+                    <td className="col-hide-mobile">{book.series || "—"}</td>
+                    <td className="col-hide-mobile">{book.genre || "—"}</td>
+                    <td className="col-hide-mobile">
                       <div className="chip-list">
                         {book.tags.map((t) => (
                           <span key={t} className="chip">
@@ -658,7 +698,7 @@ export function LibraryView() {
                         ))}
                       </div>
                     </td>
-                    <td>
+                    <td className="col-hide-mobile">
                       <div className="chip-list">
                         {book.shelfIds.map((sid) => (
                           <span key={sid} className="chip">
@@ -697,6 +737,17 @@ export function LibraryView() {
                         >
                           <BookOpen size={14} />
                         </button>
+                        {isTauriRuntime() && (
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title="Yeni Pencerede Aç"
+                            aria-label={`Yeni Pencerede Aç: ${book.title}`}
+                            onClick={() => void openBookInNewWindow(book)}
+                          >
+                            <ExternalLink size={14} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="icon-btn"

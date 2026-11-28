@@ -17,6 +17,7 @@ export interface ParsedPwaBook {
   chapters: StoredChapterEntry[];
   pageMap: number[];
   fileHash: string;
+  pdfBytes?: Uint8Array;
 }
 
 interface ZipCentralEntry {
@@ -362,6 +363,26 @@ export async function parseBrowserBookFile(
   if (lower.endsWith(".epub")) {
     return parseEpubBytes(bytes, fileName);
   }
+  if (lower.endsWith(".pdf")) {
+    const header = new TextDecoder("ascii").decode(bytes.subarray(0, 8));
+    if (!header.startsWith("%PDF-")) {
+      throw new Error("Geçerli bir PDF dosyası (%PDF-) değil.");
+    }
+    const title = fileName.replace(/\.[^.]+$/, "");
+    return {
+      title,
+      author: "PDF Belgesi",
+      language: "tr",
+      publisher: "",
+      description: "",
+      formatLabel: "PDF",
+      toc: [{ id: "pdf-page-1", title: "Sayfa 1", href: "page-1", spineIndex: 0, depth: 0 }],
+      chapters: [{ title, bodyHtml: "", plainText: "" }],
+      pageMap: [1],
+      fileHash: `pwa-pdf-${bytes.byteLength}-${title.slice(0, 16)}`,
+      pdfBytes: bytes,
+    };
+  }
   if (lower.endsWith(".docx")) {
     return parseDocxBytes(bytes, fileName);
   }
@@ -384,9 +405,7 @@ export async function parseBrowserBookFile(
       fileHash: `pwa-txt-${bytes.byteLength}`,
     };
   }
-  throw new Error(
-    "Tarayıcı/PWA modunda çevrimdışı açmak için .epub veya .docx yükleyin (PDF ve .doc için Android APK veya masaüstü sürümünü kullanın).",
-  );
+  throw new Error("Tarayıcı/PWA modunda çevrimdışı açmak için .epub, .pdf veya .docx yükleyin.");
 }
 
 export function buildStoredPayload(bookId: string, parsed: ParsedPwaBook): StoredBookPayload {
@@ -395,5 +414,6 @@ export function buildStoredPayload(bookId: string, parsed: ParsedPwaBook): Store
     toc: parsed.toc,
     pageMap: parsed.pageMap,
     chapters: parsed.chapters,
+    pdfBytes: parsed.pdfBytes,
   };
 }

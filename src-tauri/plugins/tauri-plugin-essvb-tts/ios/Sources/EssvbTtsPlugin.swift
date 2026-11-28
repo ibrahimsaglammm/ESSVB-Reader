@@ -16,6 +16,10 @@ private struct NowPlayingArgs: Decodable {
   let playing: Bool
 }
 
+private struct CopyContentUriArgs: Decodable {
+  let uri: String
+}
+
 @objc public class EssvbTtsPlugin: Plugin, AVSpeechSynthesizerDelegate {
   private let synthesizer = AVSpeechSynthesizer()
   private let queue = DispatchQueue(label: "dev.essvb.reader.tts.serial")
@@ -156,11 +160,41 @@ private struct NowPlayingArgs: Decodable {
     finishPending(status: "done")
   }
 
-  public func speechSynthesizer(
+  @objc public func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer,
     didCancel utterance: AVSpeechUtterance
   ) {
     finishPending(status: "stopped")
+  }
+
+  @objc public func copy_content_uri(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(CopyContentUriArgs.self)
+      let trimmed = args.uri.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard let url = URL(string: trimmed) ?? URL(fileURLWithPath: trimmed) as URL? else {
+        invoke.reject("Geçersiz dosya URL'si")
+        return
+      }
+      let scoped = url.startAccessingSecurityScopedResource()
+      defer {
+        if scoped {
+          url.stopAccessingSecurityScopedResource()
+        }
+      }
+      let fileName = url.lastPathComponent.isEmpty ? "kitap.epub" : url.lastPathComponent
+      let dst = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "essvb_\(Int(Date().timeIntervalSince1970))_\(fileName)")
+      if FileManager.default.fileExists(atPath: dst.path) {
+        try? FileManager.default.removeItem(at: dst)
+      }
+      try FileManager.default.copyItem(at: url, to: dst)
+      invoke.resolve([
+        "path": dst.path,
+        "fileName": fileName,
+      ])
+    } catch {
+      invoke.reject(error.localizedDescription)
+    }
   }
 }
 

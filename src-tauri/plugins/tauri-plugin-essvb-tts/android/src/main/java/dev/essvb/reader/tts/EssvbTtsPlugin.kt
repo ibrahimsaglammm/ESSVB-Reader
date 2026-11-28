@@ -2,21 +2,26 @@ package dev.essvb.reader.tts
 
 import android.app.Activity
 import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.webkit.MimeTypeMap
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -36,6 +41,11 @@ class NowPlayingArgs {
     var author: String = ""
     var chapter: String = ""
     var playing: Boolean = false
+}
+
+@InvokeArg
+class CopyContentUriArgs {
+    var uri: String = ""
 }
 
 @TauriPlugin
@@ -241,5 +251,90 @@ class EssvbTtsPlugin(private val activity: Activity) : Plugin(activity) {
             session.isActive = args.playing
         }
         invoke.resolve()
+    }
+
+    @Command
+    fun copy_content_uri(invoke: Invoke) {
+        val args = invoke.parseArgs(CopyContentUriArgs::class.java)
+        val rawUri = args.uri.trim()
+        if (rawUri.isEmpty()) {
+            invoke.reject("Boş dosya URI'si")
+            return
+        }
+
+        try {
+            val parsed = Uri.parse(rawUri)
+            val resolver = activity.contentResolver
+            var displayName: String? = null
+            resolver.query(parsed, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) {
+                        displayName = cursor.getString(idx)
+                    }
+                }
+            }
+
+            if (displayName.isNullOrBlank()) {
+                val mime = resolver.getType(parsed)
+                val extFromMime = if (mime != null) MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) else null
+                val fallbackExt = when {
+                    mime?.contains("epub", ignoreCase = true) == true -> "epub"
+                    mime?.contains("pdf", ignoreCase = true) == true -> "pdf"
+                    mime?.contains("wordprocessingml", ignoreCase = true) == true -> "docx"
+                    mime?.contains("msword", ignoreCase = true) == true -> "doc"
+                    !extFromMime.isNullOrBlank() -> extFromMime
+                    else -> "epub"
+                }
+                displayName = "kitap-${System.currentTimeMillis()}.$fallbackExt"
+            }
+
+            val safeName = displayName!!
+                .replace(Regex("[^A-Za-z0-9._\\-ığüşöçİĞÜŞÖÇ ]"), "_")
+                .replace("..", "_")
+                .trim()
+                .ifBlank { "kitap-${System.currentTimeMillis()}.epub" }
+
+            val cacheFile = File(activity.cacheDir, "essvb_import_${System.currentTimeMillis()}_$safeName")
+            var totalBytes = 0L
+            val maxBytes = 150L * 1024L * 1024L
+
+            val inputStream = resolver.openInputStream(parsed)
+            if (inputStream == null) {
+                invoke.reject("Android içerik akışı açılamadı: $rawUri")
+                return
+            }
+
+            inputStream.use { input ->
+                FileOutputStream(cacheFile).use { output ->
+                    val buf = ByteArray(65536)
+                    while (true) {
+                        val read = input.read(buf)
+                        if (read <= 0) break
+                        totalBytes += read
+                        if (totalBytes > maxBytes) {
+                            cacheFile.delete()
+                            invoke.reject("Dosya boyutu 150 MB güvenlik sınırını aşıyor")
+                            return
+                        }
+                        output.write(buf, 0, read)
+                    }
+                    output.flush()
+                }
+            }
+
+            if (totalBytes == 0L) {
+                cacheFile.delete()
+                invoke.reject("Seçilen dosya boş görünüyor")
+                return
+            }
+
+            val res = JSObject()
+            res.put("path", cacheFile.absolutePath)
+            res.put("fileName", safeName)
+            invoke.resolve(res)
+        } catch (ex: Exception) {
+            invoke.reject("Android dosya kopyalama hatası: ${ex.message ?: ex.javaClass.simpleName}")
+        }
     }
 }

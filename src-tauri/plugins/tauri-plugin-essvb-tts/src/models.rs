@@ -31,3 +31,16 @@ pub struct NowPlayingRequest {
     pub chapter: String,
     pub playing: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyContentUriRequest {
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyContentUriResponse {
+    pub path: String,
+    pub file_name: String,
+}

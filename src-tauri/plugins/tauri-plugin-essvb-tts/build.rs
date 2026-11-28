@@ -5,6 +5,7 @@ const COMMANDS: &[&str] = &[
     "resume",
     "stop",
     "update_now_playing",
+    "copy_content_uri",
 ];
 
 fn main() {

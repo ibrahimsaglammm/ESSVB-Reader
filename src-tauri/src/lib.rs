@@ -81,6 +81,7 @@ pub fn run() {
             commands::assist_selected_text_cmd,
             commands::open_external_url_cmd,
             commands::import_book_bytes,
+            commands::get_book_file_base64,
             commands::mobile_tts_info,
             commands::mobile_tts_speak_chunk,
             commands::mobile_tts_pause,

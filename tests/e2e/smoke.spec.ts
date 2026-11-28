@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed reader, v0.2.1", async ({
+test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed reader, v0.2.2", async ({
   page,
 }) => {
   const externalRequests: string[] = [];
@@ -18,8 +18,8 @@ test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed
 
   await page.goto("/", { waitUntil: "networkidle" });
 
-  // 1. Default Turkish UI & v0.2.1 version badge + offline startup update prompt + PWA manifest
-  await expect(page.getByTestId("header-version-pill")).toContainText("0.2.1");
+  // 1. Default Turkish UI & v0.2.2 version badge + offline startup update prompt + PWA manifest
+  await expect(page.getByTestId("header-version-pill")).toContainText("0.2.2");
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
     "href",
     "./manifest.webmanifest",
@@ -51,14 +51,20 @@ test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed
   expect(cspContent).toContain("script-src 'none'");
   expect(cspContent).toContain("connect-src 'none'");
 
-  // 4. Verify 2-page toggle, separate Reading & TTS badges, and Settings v0.2.1
+  // 4. Verify 2-page toggle, separate Reading & TTS badges, floating panel, multi-tab bar, and Settings v0.2.2
+  await expect(page.getByTestId("book-tabbar")).toBeVisible();
   await expect(page.getByTestId("reading-page-badge")).toBeVisible();
   await expect(page.getByTestId("tts-page-badge")).toBeVisible();
   await page.getByTestId("layout-mode-btn").click();
   await expect(page.getByTestId("reader-view")).toContainText("2 Sayfa Kitap");
 
+  await page.getByTestId("floating-settings-btn").click();
+  await expect(page.getByTestId("floating-reader-panel")).toBeVisible();
+  await page.getByTestId("floating-layout-scroll").click();
+  await expect(page.getByTestId("layout-mode-btn")).toContainText("Dikey Akış");
+
   await page.getByTestId("nav-about-btn").click();
-  await expect(page.getByTestId("about-version-text")).toContainText("0.2.1");
+  await expect(page.getByTestId("about-version-text")).toContainText("0.2.2");
 
   await page.getByTestId("settings-tab-themes").click();
   await page.getByTestId("theme-preset-select").selectOption("sepia");

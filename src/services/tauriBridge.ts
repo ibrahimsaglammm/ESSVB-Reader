@@ -95,6 +95,7 @@ export interface ApiBridge {
   removeBookFromShelf(bookId: string, shelfId: string): Promise<void>;
   getBookToc(bookId: string): Promise<TocItem[]>;
   loadChapter(bookId: string, spineIndex: number, themeCss: string): Promise<ChapterContent>;
+  getBookFileBase64(bookId: string): Promise<string>;
   searchBook(bookId: string, query: string): Promise<BookSearchMatch[]>;
   getBookPageMap(bookId: string): Promise<number[]>;
   listBookmarks(bookId: string): Promise<BookmarkDto[]>;
@@ -204,6 +205,7 @@ export const tauriApi: ApiBridge = {
   getBookToc: (bookId) => invoke("get_book_toc", { bookId }),
   loadChapter: (bookId, spineIndex, themeCss) =>
     invoke("load_chapter", { bookId, spineIndex, themeCss }),
+  getBookFileBase64: (bookId) => invoke("get_book_file_base64", { bookId }),
   searchBook: (bookId, query) => invoke("search_book", { bookId, query }),
   getBookPageMap: (bookId) => invoke("get_book_page_map", { bookId }),
   listBookmarks: (bookId) => invoke("list_bookmarks", { bookId }),
@@ -247,10 +249,16 @@ export const tauriApi: ApiBridge = {
   mobileTtsUpdateNowPlaying: (title, author, chapter, playing) =>
     invoke("mobile_tts_update_now_playing", { title, author, chapter, playing }),
   pickEpubFiles: async () => {
-    const selected = await dialogOpen({
-      multiple: true,
-      filters: [{ name: "E-Kitap / Belge", extensions: ["epub", "pdf", "docx", "doc"] }],
-    });
+    const isMobile =
+      typeof navigator !== "undefined" && /Android|iPhone|iPad/i.test(navigator.userAgent);
+    const selected = await dialogOpen(
+      isMobile
+        ? { multiple: true }
+        : {
+            multiple: true,
+            filters: [{ name: "E-Kitap / Belge", extensions: ["epub", "pdf", "docx", "doc"] }],
+          },
+    );
     if (!selected) return null;
     return Array.isArray(selected) ? selected : [selected];
   },
@@ -397,6 +405,15 @@ export function createBrowserPreviewBridge(): ApiBridge {
     return out;
   };
 
+  const encodeBase64Bytes = (bytes: Uint8Array): string => {
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(bin);
+  };
+
   const importParsedBook = async (fileName: string, bytes: Uint8Array): Promise<BookDto> => {
     const parsed = await parseBrowserBookFile(fileName, bytes);
     const now = new Date().toISOString();
@@ -490,7 +507,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
 
   return {
     getVersionInfo: async () => ({
-      version: "0.2.1",
+      version: "0.2.2",
       stageTr: "Hazırlık Aşaması (Ön Sürüm)",
       stageEn: "Development Preview (Pre-release)",
       isPortable: false,
@@ -501,8 +518,8 @@ export function createBrowserPreviewBridge(): ApiBridge {
         throw new Error("NETWORK_DISABLED: Açık kullanıcı onayı gerekli");
       }
       return {
-        currentVersion: "0.2.1",
-        latestVersion: "0.2.1",
+        currentVersion: "0.2.2",
+        latestVersion: "0.2.2",
         updateAvailable: false,
         releaseNotes: "",
         releasePageUrl: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases",
@@ -728,6 +745,14 @@ export function createBrowserPreviewBridge(): ApiBridge {
         bodyHtml: ch.bodyHtml,
         plainText: ch.plainText,
       };
+    },
+    getBookFileBase64: async (bookId) => {
+      await ensureHydrated();
+      const payload = await resolveBookPayload(bookId);
+      if (!payload.pdfBytes) {
+        throw new Error("Bu kitap için ham PDF verisi bulunamadı.");
+      }
+      return encodeBase64Bytes(payload.pdfBytes);
     },
     searchBook: async (bookId, query) => {
       await ensureHydrated();
@@ -1003,7 +1028,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
         const input = document.createElement("input");
         input.type = "file";
         input.multiple = true;
-        input.accept = ".epub,.docx,.txt,application/epub+zip";
+        input.accept = ".epub,.pdf,.docx,.txt,application/epub+zip,application/pdf";
         let resolved = false;
         input.onchange = () => {
           resolved = true;

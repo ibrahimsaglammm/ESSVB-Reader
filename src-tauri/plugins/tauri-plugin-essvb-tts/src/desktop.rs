@@ -3,7 +3,10 @@ use std::marker::PhantomData;
 use serde::de::DeserializeOwned;
 use tauri::{plugin::PluginApi, AppHandle, Runtime};
 
-use crate::models::{MobileTtsInfo, NowPlayingRequest, SpeakChunkRequest, SpeakChunkResponse};
+use crate::models::{
+    CopyContentUriRequest, CopyContentUriResponse, MobileTtsInfo, NowPlayingRequest,
+    SpeakChunkRequest, SpeakChunkResponse,
+};
 
 pub fn init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,
@@ -43,5 +46,21 @@ impl<R: Runtime> EssvbTts<R> {
 
     pub fn update_now_playing(&self, _payload: NowPlayingRequest) -> crate::Result<()> {
         Ok(())
+    }
+
+    pub fn copy_content_uri(
+        &self,
+        payload: CopyContentUriRequest,
+    ) -> crate::Result<CopyContentUriResponse> {
+        let trimmed = payload.uri.trim().to_string();
+        let file_name = std::path::Path::new(&trimmed)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("book.epub")
+            .to_string();
+        Ok(CopyContentUriResponse {
+            path: trimmed,
+            file_name,
+        })
     }
 }

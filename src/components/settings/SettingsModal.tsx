@@ -43,7 +43,7 @@ export function SettingsModal() {
     { id: "about", label: translate(lang, "tabAbout") },
   ];
 
-  const version = versionInfo?.version ?? "0.2.1";
+  const version = versionInfo?.version ?? "0.2.2";
   const stage =
     lang === "tr"
       ? (versionInfo?.stageTr ?? "Hazırlık Aşaması (Ön Sürüm)")

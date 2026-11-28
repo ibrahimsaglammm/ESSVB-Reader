@@ -295,6 +295,18 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the copy_content_uri command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-copy-content-uri",
+          "markdownDescription": "Enables the copy_content_uri command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the copy_content_uri command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-copy-content-uri",
+          "markdownDescription": "Denies the copy_content_uri command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_info command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-info",

@@ -10,6 +10,32 @@
 <tr>
 <td>
 
+`essvb-tts:allow-copy-content-uri`
+
+</td>
+<td>
+
+Enables the copy_content_uri command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`essvb-tts:deny-copy-content-uri`
+
+</td>
+<td>
+
+Denies the copy_content_uri command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `essvb-tts:allow-get-info`
 
 </td>

@@ -31,6 +31,12 @@ export type ActiveView = "library" | "reader" | "notes";
 export type SettingsTab = "general" | "themes" | "tts" | "privacy" | "backup" | "about";
 export type ChapterLandingHint = "start" | "end" | { pageIndex?: number; charOffset?: number };
 
+export interface BookTab {
+  bookId: string;
+  title: string;
+  format: string;
+}
+
 interface ToastMessage {
   id: number;
   kind: "info" | "success" | "error";
@@ -86,6 +92,7 @@ interface AppStore {
   filter: BookFilterQuery;
   activeView: ActiveView;
   activeBook: BookDto | null;
+  openBookTabs: BookTab[];
   toc: TocItem[];
   currentChapter: ChapterContent | null;
   bookSearchResults: BookSearchMatch[];
@@ -168,6 +175,9 @@ interface AppStore {
     overrideSpineIndex?: number,
     landing?: ChapterLandingHint,
   ) => Promise<void>;
+  switchBookTab: (bookId: string) => Promise<void>;
+  closeBookTab: (bookId: string) => void;
+  openBookInNewWindow: (book: BookDto) => Promise<void>;
   loadChapterIndex: (spineIndex: number, landing?: ChapterLandingHint) => Promise<void>;
   clearPendingChapterLanding: () => void;
   saveReaderProgress: (
@@ -358,6 +368,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     filter: { sortBy: "addedAt", sortDir: "desc" },
     activeView: "library",
     activeBook: null,
+    openBookTabs: [],
     toc: [],
     currentChapter: null,
     bookSearchResults: [],
@@ -422,7 +433,16 @@ export const useAppStore = create<AppStore>((set, get) => {
         await get().loadGlobalAnnotations();
         await get().refreshTtsStatuses();
 
-        if (settings.reopenLastBookOnStartup && settings.lastOpenedBookId) {
+        const urlBookId =
+          typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("bookId")
+            : null;
+        if (urlBookId) {
+          const requestedBook = get().books.find((b) => b.id === urlBookId);
+          if (requestedBook) {
+            await get().openBook(requestedBook);
+          }
+        } else if (settings.reopenLastBookOnStartup && settings.lastOpenedBookId) {
           const lastBook = get().books.find((b) => b.id === settings.lastOpenedBookId);
           if (lastBook) {
             await get().openBook(lastBook);
@@ -543,61 +563,13 @@ export const useAppStore = create<AppStore>((set, get) => {
     },
 
     importWithFileDialog: async () => {
-      const importFromHtmlPicker = async () => {
-        if (typeof document === "undefined") return;
-        const files = await new Promise<File[]>((resolve) => {
-          const input = document.createElement("input");
-          input.type = "file";
-          input.multiple = true;
-          input.accept = ".epub,.pdf,.docx,.doc";
-          let settled = false;
-          input.onchange = () => {
-            settled = true;
-            resolve(Array.from(input.files ?? []));
-          };
-          window.addEventListener(
-            "focus",
-            () => {
-              window.setTimeout(() => {
-                if (!settled) resolve([]);
-              }, 600);
-            },
-            { once: true },
-          );
-          input.click();
-        });
-        for (const file of files) {
-          const buf = new Uint8Array(await file.arrayBuffer());
-          let bin = "";
-          const chunk = 0x8000;
-          for (let i = 0; i < buf.length; i += chunk) {
-            bin += String.fromCharCode(...buf.subarray(i, i + chunk));
-          }
-          const res = await getApiBridge().importBookBytes(file.name, btoa(bin));
-          if (res.imported.length > 0) {
-            get().showToast("success", `${file.name} kütüphaneye eklendi.`);
-          } else if (res.skippedDuplicates.length > 0) {
-            get().showToast("info", "Seçilen kitap zaten kütüphanede mevcut.");
-          } else if (res.failed.length > 0) {
-            get().showToast("error", res.failed[0] ?? "Dosya içe aktarılamadı.");
-          }
-        }
-        if (files.length > 0) {
-          await get().refreshLibrary();
-        }
-      };
-
       try {
         const paths = await getApiBridge().pickEpubFiles();
         if (paths && paths.length > 0) {
-          if (paths.some((p) => p.startsWith("content://"))) {
-            await importFromHtmlPicker();
-            return;
-          }
           await get().importFilesPaths(paths);
         }
-      } catch {
-        await importFromHtmlPicker();
+      } catch (err) {
+        get().showToast("error", extractErrorMessage(err));
       }
     },
 
@@ -712,12 +684,22 @@ export const useAppStore = create<AppStore>((set, get) => {
       if (prevTtsBookId && prevTtsBookId !== book.id) {
         get().stopTts();
       }
+      const isPdf = book.epubVersion.toUpperCase().startsWith("PDF");
       const targetSpine = overrideSpineIndex ?? book.lastSpineIndex;
       const themeCss = buildReaderIframeCss(get().settings, get().systemPrefersDark);
       try {
         const [toc, chapter, notes, pageMap, bookmarks] = await Promise.all([
-          api.getBookToc(book.id),
-          api.loadChapter(book.id, targetSpine, themeCss),
+          api.getBookToc(book.id).catch(() => [] as TocItem[]),
+          isPdf
+            ? Promise.resolve({
+                spineIndex: 0,
+                chapterCount: book.spineCount,
+                title: book.title,
+                srcDoc: "",
+                bodyHtml: "",
+                plainText: "",
+              })
+            : api.loadChapter(book.id, targetSpine, themeCss),
           api.listAnnotations(book.id),
           api.getBookPageMap(book.id).catch(() => [] as number[]),
           api.listBookmarks(book.id).catch(() => [] as BookmarkDto[]),
@@ -727,8 +709,16 @@ export const useAppStore = create<AppStore>((set, get) => {
           (overrideSpineIndex !== undefined
             ? "start"
             : { pageIndex: book.lastPageIndex, charOffset: book.lastCharOffset });
+        const curTabs = get().openBookTabs;
+        const nextTabs = curTabs.some((t) => t.bookId === book.id)
+          ? curTabs
+          : [
+              ...curTabs,
+              { bookId: book.id, title: book.title, format: book.epubVersion || "EPUB" },
+            ];
         set({
           activeBook: book,
+          openBookTabs: nextTabs,
           toc,
           currentChapter: chapter,
           bookAnnotations: notes,
@@ -747,6 +737,52 @@ export const useAppStore = create<AppStore>((set, get) => {
         }
       } catch (err) {
         get().showToast("error", extractErrorMessage(err));
+      }
+    },
+
+    switchBookTab: async (bookId) => {
+      if (get().activeBook?.id === bookId) {
+        set({ activeView: "reader" });
+        return;
+      }
+      const found = get().books.find((b) => b.id === bookId);
+      if (found) {
+        await get().openBook(found);
+      }
+    },
+
+    closeBookTab: (bookId) => {
+      const remaining = get().openBookTabs.filter((t) => t.bookId !== bookId);
+      set({ openBookTabs: remaining });
+      if (get().activeBook?.id === bookId) {
+        if (remaining.length > 0) {
+          const nextTab = remaining[remaining.length - 1]!;
+          const nextBook = get().books.find((b) => b.id === nextTab.bookId);
+          if (nextBook) {
+            void get().openBook(nextBook);
+            return;
+          }
+        }
+        get().stopTts();
+        set({ activeBook: null, currentChapter: null, activeView: "library" });
+      }
+    },
+
+    openBookInNewWindow: async (book) => {
+      const safeLabel = `book-${book.id.replace(/[^a-zA-Z0-9_-]/g, "")}-${Date.now()}`.slice(0, 48);
+      try {
+        const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        const win = new WebviewWindow(safeLabel, {
+          url: `index.html?bookId=${encodeURIComponent(book.id)}`,
+          title: book.title,
+          width: 1120,
+          height: 820,
+        });
+        win.once("tauri://error", () => {
+          void get().openBook(book);
+        });
+      } catch {
+        await get().openBook(book);
       }
     },
 

@@ -1,6 +1,6 @@
 [package]
 name = "essvb-reader"
-version = "0.2.1"
+version = "0.2.2"
 description = "ESSVB-Reader - Guvenli, telemetrisiz, capraz platform EPUB, PDF, DOCX ve DOC okuyucu"
 authors = ["ESSVB-Reader Contributors"]
 license = "MIT"

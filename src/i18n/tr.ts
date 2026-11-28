@@ -7,9 +7,9 @@ export const tr = {
   navNotes: "Notlar ve Vurgular",
   navSettings: "Ayarlar",
   navAbout: "Hakkında",
-  openBookFiles: "Kitap Ekle (.epub)",
+  openBookFiles: "Kitap Ekle",
   openBookFolder: "Klasörden İçe Aktar",
-  dropHint: "EPUB dosyalarını buraya sürükleyip bırakabilirsiniz",
+  dropHint: "EPUB, PDF, DOCX ve DOC dosyalarını buraya sürükleyip bırakabilirsiniz",
   updateBannerTitle: "ESSVB-Reader v{{version}} — Güncelleme Kontrolü",
   updateBannerDesc:
     "Hazırlık aşaması sürümü kullanıyorsunuz. Gizlilik gereği onayınız olmadan dış ağ bağlantısı yapılmaz. Güncellemeleri şimdi kontrol etmek ister misiniz?",

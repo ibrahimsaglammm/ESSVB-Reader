@@ -14,6 +14,7 @@ import {
   Play,
   ScrollText,
   Search,
+  SlidersHorizontal,
   Square,
   Type,
   Volume2,
@@ -37,6 +38,8 @@ import {
   getNoteQuoteStyle,
 } from "../../utils/highlights";
 import { computeGlobalPageStats } from "../../utils/pagination";
+import { FloatingReaderPanel } from "./FloatingReaderPanel";
+import { PdfReaderView } from "./PdfReaderView";
 import { SelectionPopupMenu, type SelectionPopupRect } from "./SelectionPopupMenu";
 
 interface SelectionInfo {
@@ -184,6 +187,14 @@ function findPageForCharOffset(
 }
 
 export function ReaderView() {
+  const activeBook = useAppStore((s) => s.activeBook);
+  if (activeBook?.epubVersion.toUpperCase().startsWith("PDF")) {
+    return <PdfReaderView />;
+  }
+  return <FlowReaderView />;
+}
+
+function FlowReaderView() {
   const settings = useAppStore((s) => s.settings);
   const activeBook = useAppStore((s) => s.activeBook);
   const toc = useAppStore((s) => s.toc);
@@ -246,6 +257,10 @@ export function ReaderView() {
   } | null>(null);
 
   const [panel, setPanel] = useState<SidePanel>("none");
+  const [chromeVisible, setChromeVisible] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth > 760 : true,
+  );
+  const [floatingOpen, setFloatingOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [pageJumpOpen, setPageJumpOpen] = useState(false);
   const [pageJumpInput, setPageJumpInput] = useState("");
@@ -670,6 +685,8 @@ export function ReaderView() {
       } else if (ratio >= 0.75) {
         ev.preventDefault();
         goNextPage();
+      } else {
+        setChromeVisible((v) => !v);
       }
     };
 
@@ -880,166 +897,170 @@ export function ReaderView() {
   return (
     <div className="reader-shell" data-testid="reader-view">
       {/* Top Reader Controls */}
-      <div className="reader-topbar">
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-          <button
-            type="button"
-            onClick={() => {
-              const m = lastMeasuredRef.current;
-              if (m) {
-                void saveReaderProgress(m.spineIndex, m.ratio, m.pageIndex, m.charOffset);
-              }
-              setActiveView("library");
-            }}
-            data-testid="back-to-library-btn"
-          >
-            <ArrowLeft size={15} />
-            {translate(lang, "readerBackToLibrary")}
-          </button>
-          <span
-            style={{
-              fontWeight: 600,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {activeBook.title} — {currentChapter.title}
-          </span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            className={panel === "toc" ? "primary" : ""}
-            onClick={() => setPanel(panel === "toc" ? "none" : "toc")}
-          >
-            <List size={15} />
-            {translate(lang, "readerToc")}
-          </button>
-          <button
-            type="button"
-            className={panel === "search" ? "primary" : ""}
-            onClick={() => setPanel(panel === "search" ? "none" : "search")}
-          >
-            <Search size={15} />
-            {translate(lang, "readerSearch")}
-          </button>
-          <button
-            type="button"
-            className={panel === "notes" ? "primary" : ""}
-            onClick={() => setPanel(panel === "notes" ? "none" : "notes")}
-          >
-            <BookMarked size={15} />
-            {translate(lang, "readerNotes")} ({bookAnnotations.length})
-          </button>
-          <button
-            type="button"
-            className={panel === "bookmarks" ? "primary" : ""}
-            onClick={() => setPanel(panel === "bookmarks" ? "none" : "bookmarks")}
-            data-testid="bookmarks-tab-btn"
-          >
-            <Bookmark size={15} />
-            {translate(lang, "bookmarksTitle")} ({bookBookmarks.length})
-          </button>
-          <button
-            type="button"
-            className={isCurrentPageBookmarked ? "primary" : ""}
-            onClick={handleBookmarkCurrent}
-            title={translate(lang, "bookmarkAdd")}
-            aria-label={translate(lang, "bookmarkAdd")}
-            data-testid="bookmark-toggle-btn"
-          >
-            <Bookmark size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={cycleLayoutMode}
-            title={translate(lang, "layoutToggleTooltip")}
-            data-testid="layout-mode-btn"
-          >
-            {settings.readerLayoutMode === "paginated-2" ? (
-              <Columns2 size={15} />
-            ) : settings.readerLayoutMode === "scroll" ? (
-              <ScrollText size={15} />
-            ) : (
-              <BookOpen size={15} />
-            )}
-            {layoutLabel}
-          </button>
-          <button
-            type="button"
-            className={panel === "typography" ? "primary" : ""}
-            onClick={() => setPanel(panel === "typography" ? "none" : "typography")}
-          >
-            <Type size={15} />
-            {translate(lang, "readerTypography")}
-          </button>
-          <button
-            type="button"
-            disabled={currentChapter.spineIndex <= 0 && (!isPaginated || pageState.pageIndex <= 0)}
-            onClick={goPrevPage}
-            aria-label={translate(lang, "prevPageBtn")}
-          >
-            <ChevronLeft size={15} />
-          </button>
-          <button
-            type="button"
-            className="page-status-pill"
-            onClick={() => {
-              setPageJumpInput(String(globalPageStats.currentGlobalPage));
-              setPageJumpOpen((prev) => !prev);
-            }}
-            data-testid="reading-page-badge"
-            title={translate(lang, "pageJumpPrompt", {
-              total: globalPageStats.totalGlobalPages,
-            })}
-          >
-            <BookOpen size={13} style={{ marginRight: "4px", verticalAlign: "-2px" }} />
-            {translate(lang, "readingPageBadge", {
-              current: globalPageStats.currentGlobalPage,
-              total: globalPageStats.totalGlobalPages,
-            })}
-          </button>
-          {pageJumpOpen && (
-            <form
-              style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
-              onSubmit={(e) => {
-                e.preventDefault();
-                const parsed = Number.parseInt(pageJumpInput, 10);
-                if (!Number.isNaN(parsed)) {
-                  void jumpToGlobalPage(parsed);
+      {chromeVisible && (
+        <div className="reader-topbar">
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+            <button
+              type="button"
+              onClick={() => {
+                const m = lastMeasuredRef.current;
+                if (m) {
+                  void saveReaderProgress(m.spineIndex, m.ratio, m.pageIndex, m.charOffset);
                 }
-                setPageJumpOpen(false);
+                setActiveView("library");
+              }}
+              data-testid="back-to-library-btn"
+            >
+              <ArrowLeft size={15} />
+              {translate(lang, "readerBackToLibrary")}
+            </button>
+            <span
+              style={{
+                fontWeight: 600,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
               }}
             >
-              <input
-                type="number"
-                min={1}
-                max={globalPageStats.totalGlobalPages}
-                value={pageJumpInput}
-                onChange={(e) => setPageJumpInput(e.target.value)}
-                style={{ width: "68px" }}
-                data-testid="page-jump-input"
-              />
-              <button type="submit" className="primary">
-                OK
-              </button>
-            </form>
-          )}
-          <button
-            type="button"
-            disabled={
-              currentChapter.spineIndex + 1 >= currentChapter.chapterCount &&
-              (!isPaginated || pageState.pageIndex + 1 >= pageState.totalPages)
-            }
-            onClick={goNextPage}
-            aria-label={translate(lang, "nextPageBtn")}
-          >
-            <ChevronRight size={15} />
-          </button>
+              {activeBook.title} — {currentChapter.title}
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className={panel === "toc" ? "primary" : ""}
+              onClick={() => setPanel(panel === "toc" ? "none" : "toc")}
+            >
+              <List size={15} />
+              {translate(lang, "readerToc")}
+            </button>
+            <button
+              type="button"
+              className={panel === "search" ? "primary" : ""}
+              onClick={() => setPanel(panel === "search" ? "none" : "search")}
+            >
+              <Search size={15} />
+              {translate(lang, "readerSearch")}
+            </button>
+            <button
+              type="button"
+              className={panel === "notes" ? "primary" : ""}
+              onClick={() => setPanel(panel === "notes" ? "none" : "notes")}
+            >
+              <BookMarked size={15} />
+              {translate(lang, "readerNotes")} ({bookAnnotations.length})
+            </button>
+            <button
+              type="button"
+              className={panel === "bookmarks" ? "primary" : ""}
+              onClick={() => setPanel(panel === "bookmarks" ? "none" : "bookmarks")}
+              data-testid="bookmarks-tab-btn"
+            >
+              <Bookmark size={15} />
+              {translate(lang, "bookmarksTitle")} ({bookBookmarks.length})
+            </button>
+            <button
+              type="button"
+              className={isCurrentPageBookmarked ? "primary" : ""}
+              onClick={handleBookmarkCurrent}
+              title={translate(lang, "bookmarkAdd")}
+              aria-label={translate(lang, "bookmarkAdd")}
+              data-testid="bookmark-toggle-btn"
+            >
+              <Bookmark size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={cycleLayoutMode}
+              title={translate(lang, "layoutToggleTooltip")}
+              data-testid="layout-mode-btn"
+            >
+              {settings.readerLayoutMode === "paginated-2" ? (
+                <Columns2 size={15} />
+              ) : settings.readerLayoutMode === "scroll" ? (
+                <ScrollText size={15} />
+              ) : (
+                <BookOpen size={15} />
+              )}
+              {layoutLabel}
+            </button>
+            <button
+              type="button"
+              className={panel === "typography" ? "primary" : ""}
+              onClick={() => setPanel(panel === "typography" ? "none" : "typography")}
+            >
+              <Type size={15} />
+              {translate(lang, "readerTypography")}
+            </button>
+            <button
+              type="button"
+              disabled={
+                currentChapter.spineIndex <= 0 && (!isPaginated || pageState.pageIndex <= 0)
+              }
+              onClick={goPrevPage}
+              aria-label={translate(lang, "prevPageBtn")}
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <button
+              type="button"
+              className="page-status-pill"
+              onClick={() => {
+                setPageJumpInput(String(globalPageStats.currentGlobalPage));
+                setPageJumpOpen((prev) => !prev);
+              }}
+              data-testid="reading-page-badge"
+              title={translate(lang, "pageJumpPrompt", {
+                total: globalPageStats.totalGlobalPages,
+              })}
+            >
+              <BookOpen size={13} style={{ marginRight: "4px", verticalAlign: "-2px" }} />
+              {translate(lang, "readingPageBadge", {
+                current: globalPageStats.currentGlobalPage,
+                total: globalPageStats.totalGlobalPages,
+              })}
+            </button>
+            {pageJumpOpen && (
+              <form
+                style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const parsed = Number.parseInt(pageJumpInput, 10);
+                  if (!Number.isNaN(parsed)) {
+                    void jumpToGlobalPage(parsed);
+                  }
+                  setPageJumpOpen(false);
+                }}
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={globalPageStats.totalGlobalPages}
+                  value={pageJumpInput}
+                  onChange={(e) => setPageJumpInput(e.target.value)}
+                  style={{ width: "68px" }}
+                  data-testid="page-jump-input"
+                />
+                <button type="submit" className="primary">
+                  OK
+                </button>
+              </form>
+            )}
+            <button
+              type="button"
+              disabled={
+                currentChapter.spineIndex + 1 >= currentChapter.chapterCount &&
+                (!isPaginated || pageState.pageIndex + 1 >= pageState.totalPages)
+              }
+              onClick={goNextPage}
+              aria-label={translate(lang, "nextPageBtn")}
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Main Reader Workspace */}
       <div className="reader-workspace">
@@ -1393,118 +1414,161 @@ export function ReaderView() {
               }}
             />
           )}
+          <button
+            type="button"
+            className="floating-reader-trigger"
+            onClick={(e) => {
+              e.stopPropagation();
+              setFloatingOpen((o) => !o);
+            }}
+            data-testid="floating-settings-btn"
+            aria-label="Okuma Düzeni ve Ayarlar"
+          >
+            <SlidersHorizontal size={16} />
+            <span>
+              S. {globalPageStats.currentGlobalPage}/{globalPageStats.totalGlobalPages}
+            </span>
+          </button>
+
+          <FloatingReaderPanel
+            open={floatingOpen}
+            onClose={() => setFloatingOpen(false)}
+            lang={lang}
+            settings={settings}
+            onUpdateSettings={updateSettings}
+            isBookmarked={isCurrentPageBookmarked}
+            onToggleBookmark={handleBookmarkCurrent}
+            onOpenSidePanel={(p) => {
+              setPanel(p);
+              setFloatingOpen(false);
+            }}
+            ttsPlaying={ttsState === "playing"}
+            onToggleTts={() => {
+              if (ttsState === "playing") {
+                pauseTts();
+              } else if (ttsState === "paused") {
+                void resumeTts();
+              } else {
+                void resumeOrStartTtsFromSaved();
+              }
+            }}
+          />
         </div>
       </div>
 
       {/* TTS Control Dock */}
-      <div className="tts-bar" role="region" aria-label={translate(lang, "ttsTitle")}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-          <Volume2 size={16} aria-hidden="true" />
-          <strong>{translate(lang, "ttsTitle")}</strong>
-          <button
-            type="button"
-            className="tts-status-pill"
-            onClick={() => void jumpVisualToTtsLocation()}
-            title={translate(lang, "ttsJumpToVoice", {
-              page: activeBook.ttsPageNumber || 1,
-            })}
-            data-testid="tts-page-badge"
-          >
-            <Headphones size={12} style={{ marginRight: "4px", verticalAlign: "-1px" }} />
-            {translate(lang, "ttsPageBadge", {
-              page: activeBook.ttsPageNumber || 1,
-            })}
-          </button>
-          <span className="chip">
-            {translate(lang, "ttsProviderActive")}: {ttsActiveVoice || settings.ttsProvider}
-          </span>
-          {ttsChunks.length > 0 && (
-            <span className="chip">
-              {translate(lang, "ttsChunkStatus", {
-                current: ttsChunkIndex + 1,
-                total: ttsChunks.length,
-              })}
-            </span>
-          )}
-          {ttsError && <span style={{ color: "var(--danger)", fontSize: "12px" }}>{ttsError}</span>}
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-          {ttsState === "idle" || ttsState === "error" ? (
+      {chromeVisible && (
+        <div className="tts-bar" role="region" aria-label={translate(lang, "ttsTitle")}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <Volume2 size={16} aria-hidden="true" />
+            <strong>{translate(lang, "ttsTitle")}</strong>
             <button
               type="button"
-              className="primary"
-              onClick={() => void resumeOrStartTtsFromSaved()}
-              data-testid="tts-play-chapter-btn"
-              title={translate(lang, "ttsResumeSaved")}
+              className="tts-status-pill"
+              onClick={() => void jumpVisualToTtsLocation()}
+              title={translate(lang, "ttsJumpToVoice", {
+                page: activeBook.ttsPageNumber || 1,
+              })}
+              data-testid="tts-page-badge"
             >
-              <Play size={14} />
-              {translate(lang, "ttsPlay")}
+              <Headphones size={12} style={{ marginRight: "4px", verticalAlign: "-1px" }} />
+              {translate(lang, "ttsPageBadge", {
+                page: activeBook.ttsPageNumber || 1,
+              })}
             </button>
-          ) : ttsState === "paused" ? (
-            <button type="button" className="primary" onClick={() => void resumeTts()}>
-              <Play size={14} />
-              {translate(lang, "ttsResume")}
+            <span className="chip">
+              {translate(lang, "ttsProviderActive")}: {ttsActiveVoice || settings.ttsProvider}
+            </span>
+            {ttsChunks.length > 0 && (
+              <span className="chip">
+                {translate(lang, "ttsChunkStatus", {
+                  current: ttsChunkIndex + 1,
+                  total: ttsChunks.length,
+                })}
+              </span>
+            )}
+            {ttsError && (
+              <span style={{ color: "var(--danger)", fontSize: "12px" }}>{ttsError}</span>
+            )}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+            {ttsState === "idle" || ttsState === "error" ? (
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void resumeOrStartTtsFromSaved()}
+                data-testid="tts-play-chapter-btn"
+                title={translate(lang, "ttsResumeSaved")}
+              >
+                <Play size={14} />
+                {translate(lang, "ttsPlay")}
+              </button>
+            ) : ttsState === "paused" ? (
+              <button type="button" className="primary" onClick={() => void resumeTts()}>
+                <Play size={14} />
+                {translate(lang, "ttsResume")}
+              </button>
+            ) : (
+              <button type="button" onClick={pauseTts}>
+                <Pause size={14} />
+                {translate(lang, "ttsPause")}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleMoveTtsHere}
+              data-testid="tts-move-here-btn"
+              title={translate(lang, "ttsMoveHere")}
+            >
+              <Navigation size={14} />
+              {translate(lang, "ttsMoveHere")}
             </button>
-          ) : (
-            <button type="button" onClick={pauseTts}>
-              <Pause size={14} />
-              {translate(lang, "ttsPause")}
+
+            <button
+              type="button"
+              disabled={ttsState === "idle" || ttsChunkIndex <= 0}
+              onClick={() => void prevTtsChunk()}
+              aria-label={translate(lang, "ttsPrev")}
+            >
+              <SkipBack size={14} />
             </button>
-          )}
+            <button
+              type="button"
+              disabled={ttsState === "idle" || ttsChunkIndex + 1 >= ttsChunks.length}
+              onClick={() => void nextTtsChunk()}
+              aria-label={translate(lang, "ttsNext")}
+            >
+              <SkipForward size={14} />
+            </button>
+            <button
+              type="button"
+              disabled={ttsState === "idle"}
+              onClick={stopTts}
+              aria-label={translate(lang, "ttsStop")}
+            >
+              <Square size={14} />
+              {translate(lang, "ttsStop")}
+            </button>
 
-          <button
-            type="button"
-            onClick={handleMoveTtsHere}
-            data-testid="tts-move-here-btn"
-            title={translate(lang, "ttsMoveHere")}
-          >
-            <Navigation size={14} />
-            {translate(lang, "ttsMoveHere")}
-          </button>
-
-          <button
-            type="button"
-            disabled={ttsState === "idle" || ttsChunkIndex <= 0}
-            onClick={() => void prevTtsChunk()}
-            aria-label={translate(lang, "ttsPrev")}
-          >
-            <SkipBack size={14} />
-          </button>
-          <button
-            type="button"
-            disabled={ttsState === "idle" || ttsChunkIndex + 1 >= ttsChunks.length}
-            onClick={() => void nextTtsChunk()}
-            aria-label={translate(lang, "ttsNext")}
-          >
-            <SkipForward size={14} />
-          </button>
-          <button
-            type="button"
-            disabled={ttsState === "idle"}
-            onClick={stopTts}
-            aria-label={translate(lang, "ttsStop")}
-          >
-            <Square size={14} />
-            {translate(lang, "ttsStop")}
-          </button>
-
-          <label
-            style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" }}
-          >
-            {translate(lang, "ttsSpeed")}: {settings.ttsRate.toFixed(1)}x
-            <input
-              type="range"
-              min={0.5}
-              max={2.0}
-              step={0.1}
-              value={settings.ttsRate}
-              onChange={(e) => void updateSettings({ ttsRate: Number(e.target.value) })}
-              aria-label={translate(lang, "ttsSpeed")}
-            />
-          </label>
+            <label
+              style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" }}
+            >
+              {translate(lang, "ttsSpeed")}: {settings.ttsRate.toFixed(1)}x
+              <input
+                type="range"
+                min={0.5}
+                max={2.0}
+                step={0.1}
+                value={settings.ttsRate}
+                onChange={(e) => void updateSettings({ ttsRate: Number(e.target.value) })}
+                aria-label={translate(lang, "ttsSpeed")}
+              />
+            </label>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Explicit Pre-Send Gemini Cloud TTS Confirmation Dialog */}
       {ttsPendingConsentText && (

@@ -13,6 +13,7 @@ Aşağıda `src-tauri/Cargo.lock` ve `pnpm-lock.yaml` kilit dosyalarından doğr
 | `rusqlite` | `0.32.1` | `MIT` | Gömülü SQLite kütüphane, raf, etiket ve not veritabanı |
 | `zip` | `2.6.1` | `MIT` | EPUB ZIP arşivi okuma (`default-features = false`, yalnızca `deflate`) |
 | `quick-xml` | `0.37.5` | `MIT` | `container.xml`, OPF 2/3, NCX, Nav XML ayrıştırma |
+| `lopdf` | `0.34.0` | `MIT` | Saf Rust PDF meta veri ve metin katmanı ayrıştırma |
 | `ammonia` | `4.2.5` | `MIT OR Apache-2.0` | `html5ever` tabanlı katı EPUB HTML5 XSS sanitizasyonu |
 | `image` | `0.25.10` | `MIT OR Apache-2.0` | Kapak küçük resmi oluşturma (`jpeg`, `png`, `gif`, `webp`) |
 | `reqwest` | `0.12.28` | `MIT OR Apache-2.0` | Yalnızca `rustls-tls` ile isteğe bağlı Ollama/Gemini/güncelleme HTTP |
@@ -37,6 +38,7 @@ Aşağıda `src-tauri/Cargo.lock` ve `pnpm-lock.yaml` kilit dosyalarından doğr
 | `@tauri-apps/api` | `2.12.5` | `MIT OR Apache-2.0` | Tauri IPC istemci köprüsü |
 | `@tauri-apps/plugin-dialog` | `2.8.4` | `MIT OR Apache-2.0` | Dosya seçim köprüsü |
 | `lucide-react` | `0.553.0` | `ISC` | Yerel paketlenmiş SVG simgeler (CDN isteği yok) |
+| `pdfjs-dist` | `6.5.438` | `Apache-2.0` | Yerel çevrimdışı görsel PDF sayfa işleme motoru |
 | `vite` / `@vitejs/plugin-react` | `7.3.8` / `5.1.1` | `MIT` | Üretim paketleyici |
 | `typescript` | `5.9.3` | `Apache-2.0` | Statik tip denetimi |
 | `vitest` / `@testing-library/react` | `4.1.12` / `16.3.0` | `MIT` | Ön yüz birim testleri |

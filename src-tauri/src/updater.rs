@@ -932,8 +932,8 @@ mod tests {
     }
 
     #[test]
-    fn reports_version_0_2_1() {
+    fn reports_version_0_2_2() {
         let info = get_app_version_info(false);
-        assert_eq!(info.version, "0.2.1");
+        assert_eq!(info.version, "0.2.2");
     }
 }
