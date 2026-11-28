@@ -1,13 +1,20 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tauri::State;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use tauri::{AppHandle, State};
+use tauri_plugin_essvb_tts::{
+    EssvbTtsExt, MobileTtsInfo, NowPlayingRequest, SpeakChunkRequest, SpeakChunkResponse,
+};
+use uuid::Uuid;
 
 use crate::assistant::{
     assist_selected_text, open_external_url, TextAssistRequest, TextAssistResponse,
 };
 use crate::core::document::{
-    compute_spine_char_counts, get_document_toc, load_document_chapter, search_document,
+    compute_spine_char_counts, get_document_toc, is_supported_book_extension,
+    load_document_chapter, search_document,
 };
 use crate::core::epub::{BookSearchMatch, ChapterContent, TocItem};
 use crate::error::AppError;
@@ -467,4 +474,109 @@ pub async fn assist_selected_text_cmd(
 #[tauri::command]
 pub fn open_external_url_cmd(url: String) -> Result<(), AppError> {
     open_external_url(&url)
+}
+
+#[tauri::command]
+pub async fn import_book_bytes(
+    state: State<'_, AppState>,
+    file_name: String,
+    bytes_base64: String,
+) -> Result<ImportSummary, AppError> {
+    const MAX_UPLOAD_BYTES: usize = 150 * 1024 * 1024;
+    let safe_name = Path::new(file_name.trim())
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| AppError::Validation("Geçersiz dosya adı".into()))?
+        .to_string();
+    let ext = Path::new(&safe_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !is_supported_book_extension(&ext) {
+        return Err(AppError::Validation(format!(
+            "Desteklenmeyen dosya biçimi: {safe_name}"
+        )));
+    }
+    let decoded = BASE64_STANDARD
+        .decode(bytes_base64.trim())
+        .map_err(|e| AppError::Validation(format!("Dosya verisi çözümlenemedi: {e}")))?;
+    if decoded.is_empty() || decoded.len() > MAX_UPLOAD_BYTES {
+        return Err(AppError::Security(
+            "Dosya boyutu izin verilen sınırı aşıyor veya boş".into(),
+        ));
+    }
+
+    let db = Arc::clone(&state.db);
+    let temp_dir = db.paths().base_dir.join("tmp_imports");
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_path = temp_dir.join(format!("{}.{}", Uuid::new_v4(), ext));
+    std::fs::write(&temp_path, &decoded)?;
+
+    let res = tokio::task::spawn_blocking(move || {
+        let out = db.import_epub_paths(std::slice::from_ref(&temp_path));
+        let _ = std::fs::remove_file(&temp_path);
+        out
+    })
+    .await
+    .map_err(|e| AppError::Io(e.to_string()))??;
+    Ok(res)
+}
+
+#[tauri::command]
+pub fn mobile_tts_info(app: AppHandle) -> Result<MobileTtsInfo, AppError> {
+    app.essvb_tts()
+        .get_info()
+        .map_err(|e| AppError::Tts(e.to_string()))
+}
+
+#[tauri::command]
+pub fn mobile_tts_speak_chunk(
+    app: AppHandle,
+    text: String,
+    rate: f32,
+    lang: String,
+) -> Result<SpeakChunkResponse, AppError> {
+    app.essvb_tts()
+        .speak_chunk(SpeakChunkRequest { text, rate, lang })
+        .map_err(|e| AppError::Tts(e.to_string()))
+}
+
+#[tauri::command]
+pub fn mobile_tts_pause(app: AppHandle) -> Result<(), AppError> {
+    app.essvb_tts()
+        .pause()
+        .map_err(|e| AppError::Tts(e.to_string()))
+}
+
+#[tauri::command]
+pub fn mobile_tts_resume(app: AppHandle) -> Result<(), AppError> {
+    app.essvb_tts()
+        .resume()
+        .map_err(|e| AppError::Tts(e.to_string()))
+}
+
+#[tauri::command]
+pub fn mobile_tts_stop(app: AppHandle) -> Result<(), AppError> {
+    app.essvb_tts()
+        .stop()
+        .map_err(|e| AppError::Tts(e.to_string()))
+}
+
+#[tauri::command]
+pub fn mobile_tts_update_now_playing(
+    app: AppHandle,
+    title: String,
+    author: String,
+    chapter: String,
+    playing: bool,
+) -> Result<(), AppError> {
+    app.essvb_tts()
+        .update_now_playing(NowPlayingRequest {
+            title,
+            author,
+            chapter,
+            playing,
+        })
+        .map_err(|e| AppError::Tts(e.to_string()))
 }

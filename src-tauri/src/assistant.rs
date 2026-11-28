@@ -1,3 +1,4 @@
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use std::process::Command;
 use std::time::Duration;
 
@@ -386,6 +387,14 @@ pub fn open_external_url(raw: &str) -> Result<(), AppError> {
             .spawn()
             .map_err(|e| AppError::Io(format!("Tarayıcı açılamadı (open): {e}")))?;
         Ok(())
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        let _ = url_str;
+        Err(AppError::Io(
+            "Mobil webview dış bağlantı açmayı ön yüzde yönetir".into(),
+        ))
     }
 }
 

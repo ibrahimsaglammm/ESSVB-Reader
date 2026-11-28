@@ -56,12 +56,12 @@ Set-Content -Path (Join-Path $StageDir "portable.txt") -Value "ESSVB-Reader Port
 Copy-Item (Join-Path $Root "LICENSE") (Join-Path $StageDir "LICENSE") -Force
 Copy-Item (Join-Path $Root "THIRD_PARTY_LICENSES.md") (Join-Path $StageDir "THIRD_PARTY_LICENSES.md") -Force
 Set-Content -Path (Join-Path $StageDir "README-PORTABLE.txt") -Value @"
-ESSVB-Reader v0.2.0 (Portable Edition)
+ESSVB-Reader v0.2.1 (Portable Edition)
 - portable.txt dosyasi bu klasorde bulundugu surece tum kitaplar, veritabani, vurgular ve ayarlar yanindaki 'data' klasorunde saklanir.
 - Microsoft Tolga Turkce sesli okuma icin Windows 11 Ayarlar > Zaman ve Dil > Konusma bolumunden Turkce ses paketinin kurulu oldugundan emin olun.
 "@ -Encoding UTF8
 
-$PortableZip = Join-Path $OutDir "ESSVB-Reader-0.2.0-windows-x64-portable.zip"
+$PortableZip = Join-Path $OutDir "ESSVB-Reader-0.2.1-windows-x64-portable.zip"
 if (Test-Path $PortableZip) { Remove-Item -Force $PortableZip }
 $ProgressPreference = "SilentlyContinue"
 Compress-Archive -Path (Join-Path $StageDir "*") -DestinationPath $PortableZip -CompressionLevel Optimal

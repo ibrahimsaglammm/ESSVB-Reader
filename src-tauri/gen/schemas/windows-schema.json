@@ -2281,6 +2281,78 @@
           "type": "string",
           "const": "dialog:deny-save",
           "markdownDescription": "Denies the save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:allow-get-info",
+          "markdownDescription": "Enables the get_info command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pause command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:allow-pause",
+          "markdownDescription": "Enables the pause command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the resume command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:allow-resume",
+          "markdownDescription": "Enables the resume command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the speak_chunk command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:allow-speak-chunk",
+          "markdownDescription": "Enables the speak_chunk command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:allow-stop",
+          "markdownDescription": "Enables the stop command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_now_playing command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:allow-update-now-playing",
+          "markdownDescription": "Enables the update_now_playing command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:deny-get-info",
+          "markdownDescription": "Denies the get_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pause command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:deny-pause",
+          "markdownDescription": "Denies the pause command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the resume command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:deny-resume",
+          "markdownDescription": "Denies the resume command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the speak_chunk command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:deny-speak-chunk",
+          "markdownDescription": "Denies the speak_chunk command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:deny-stop",
+          "markdownDescription": "Denies the stop command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_now_playing command without any pre-configured scope.",
+          "type": "string",
+          "const": "essvb-tts:deny-update-now-playing",
+          "markdownDescription": "Denies the update_now_playing command without any pre-configured scope."
         }
       ]
     },

@@ -2,6 +2,14 @@ import type { TextChunk, TtsSynthesisResponse } from "../types/models";
 
 export interface TtsQueueCallbacks {
   synthesize: (text: string, rate: number) => Promise<TtsSynthesisResponse>;
+  shouldUseDirect?: () => boolean;
+  speakDirect?: (
+    text: string,
+    rate: number,
+  ) => Promise<{ status: "done" | "stopped"; voiceName: string }>;
+  pauseDirect?: () => Promise<void>;
+  resumeDirect?: () => Promise<void>;
+  stopDirect?: () => Promise<void>;
   onChunkStart: (
     chunk: TextChunk,
     index: number,
@@ -14,8 +22,9 @@ export interface TtsQueueCallbacks {
 }
 
 /**
- * Sequential chunk player with pre-fetching of the next chunk (local cache friendly)
- * and zero silent fallback across providers.
+ * Sequential chunk player with zero silent fallback across providers.
+ * Supports both WAV synthesis (`HTMLAudioElement`) on desktop/Ollama/Gemini
+ * and direct OS speech (`speakDirect`) on Android Kotlin, iOS Swift, and Safari PWA.
  */
 export class TtsQueueController {
   private chunks: TextChunk[] = [];
@@ -24,6 +33,8 @@ export class TtsQueueController {
   private audio: HTMLAudioElement | null = null;
   private state: "idle" | "playing" | "paused" | "loading" | "error" = "idle";
   private runToken = 0;
+  private directActive = false;
+  private directNeedsReplayOnResume = false;
   private readonly callbacks: TtsQueueCallbacks;
 
   constructor(callbacks: TtsQueueCallbacks) {
@@ -56,14 +67,33 @@ export class TtsQueueController {
   }
 
   public pause(): void {
-    if (this.state === "playing" && this.audio) {
+    if (this.state !== "playing") return;
+    if (this.directActive && this.callbacks.speakDirect) {
+      this.setState("paused");
+      void this.callbacks.pauseDirect?.();
+      return;
+    }
+    if (this.audio) {
       this.audio.pause();
       this.setState("paused");
     }
   }
 
   public async resume(): Promise<void> {
-    if (this.state === "paused" && this.audio) {
+    if (this.state !== "paused") return;
+    if (this.directActive && this.callbacks.speakDirect) {
+      if (this.directNeedsReplayOnResume) {
+        this.directNeedsReplayOnResume = false;
+        await this.playIndex(this.currentIndex);
+        return;
+      }
+      this.setState("playing");
+      await this.callbacks.resumeDirect?.().catch((err) => {
+        this.fail(err instanceof Error ? err.message : String(err));
+      });
+      return;
+    }
+    if (this.audio) {
       this.setState("playing");
       await this.audio.play().catch((err) => {
         this.fail(err instanceof Error ? err.message : String(err));
@@ -87,6 +117,11 @@ export class TtsQueueController {
 
   public stop(): void {
     this.runToken += 1;
+    this.directNeedsReplayOnResume = false;
+    if (this.directActive) {
+      this.directActive = false;
+      void this.callbacks.stopDirect?.();
+    }
     if (this.audio) {
       this.audio.onended = null;
       this.audio.onerror = null;
@@ -104,6 +139,8 @@ export class TtsQueueController {
 
   private fail(message: string): void {
     this.runToken += 1;
+    this.directActive = false;
+    this.directNeedsReplayOnResume = false;
     if (this.audio) {
       this.audio.pause();
       this.audio = null;
@@ -122,6 +159,7 @@ export class TtsQueueController {
 
     const token = ++this.runToken;
     this.currentIndex = index;
+    this.directNeedsReplayOnResume = false;
     if (this.audio) {
       this.audio.onended = null;
       this.audio.onerror = null;
@@ -129,6 +167,50 @@ export class TtsQueueController {
       this.audio = null;
     }
 
+    const wantsDirect =
+      Boolean(this.callbacks.speakDirect) &&
+      (this.callbacks.shouldUseDirect ? this.callbacks.shouldUseDirect() : true);
+
+    if (wantsDirect && this.callbacks.speakDirect) {
+      this.directActive = true;
+      this.callbacks.onChunkStart(chunk, index, this.chunks.length, {
+        audioBase64: "",
+        mimeType: "audio/native",
+        providerId: "local",
+        voiceName: "Yerel Cihaz Sesi",
+        fromCache: false,
+        preparedText: chunk.text,
+      });
+      this.setState("playing");
+      try {
+        const res = await this.callbacks.speakDirect(chunk.text, this.rate);
+        if (token !== this.runToken) return;
+        if (res.status === "stopped") {
+          if (this.state === "paused") {
+            this.directNeedsReplayOnResume = true;
+          }
+          return;
+        }
+        if (index + 1 < this.chunks.length) {
+          await this.playIndex(index + 1);
+        } else {
+          this.stop();
+          this.callbacks.onComplete();
+        }
+      } catch (err) {
+        if (token !== this.runToken) return;
+        const msg =
+          err instanceof Error
+            ? err.message
+            : typeof err === "object" && err !== null && "message" in err
+              ? String((err as { message: unknown }).message)
+              : String(err);
+        this.fail(msg);
+      }
+      return;
+    }
+
+    this.directActive = false;
     this.setState("loading");
     try {
       const resp = await this.callbacks.synthesize(chunk.text, this.rate);

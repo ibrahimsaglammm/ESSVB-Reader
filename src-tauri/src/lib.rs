@@ -16,11 +16,15 @@ use crate::library::db::LibraryDb;
 use crate::paths::AppPaths;
 use crate::tts::TtsManager;
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_essvb_tts::init())
         .setup(|app| {
             let paths = AppPaths::resolve(app.handle())?;
+            #[cfg(target_os = "android")]
+            settings::secrets::init_android_secrets_dir(&paths.base_dir);
             let cache_dir = paths.tts_cache_dir.clone();
             let db = Arc::new(LibraryDb::open(paths)?);
             let tts = Arc::new(TtsManager::new(cache_dir)?);
@@ -76,6 +80,13 @@ pub fn run() {
             commands::clear_tts_cache,
             commands::assist_selected_text_cmd,
             commands::open_external_url_cmd,
+            commands::import_book_bytes,
+            commands::mobile_tts_info,
+            commands::mobile_tts_speak_chunk,
+            commands::mobile_tts_pause,
+            commands::mobile_tts_resume,
+            commands::mobile_tts_stop,
+            commands::mobile_tts_update_now_playing,
         ])
         .run(tauri::generate_context!())
         .expect("ESSVB-Reader başlatılırken hata oluştu");

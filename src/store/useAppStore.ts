@@ -113,6 +113,8 @@ interface AppStore {
   ttsBaseCharOffset: number;
   ttsFollowStream: boolean;
   ttsCacheStats: TtsCacheStats | null;
+  mobileTtsAvailable: boolean;
+  mobileTtsVoiceName: string;
   ollamaModels: string[];
   updateBannerDismissed: boolean;
   updateCheckResult: UpdateCheckResult | null;
@@ -258,14 +260,35 @@ export const useAppStore = create<AppStore>((set, get) => {
         synthesize: async (text, rate) => {
           return getApiBridge().synthesizeTtsChunk(text, rate);
         },
+        shouldUseDirect: () => {
+          const st = get();
+          return st.settings.ttsProvider === "local" && st.mobileTtsAvailable;
+        },
+        speakDirect: async (text, rate) => {
+          const st = get();
+          return getApiBridge().mobileTtsSpeakChunk(text, rate, st.settings.language);
+        },
+        pauseDirect: async () => getApiBridge().mobileTtsPause(),
+        resumeDirect: async () => getApiBridge().mobileTtsResume(),
+        stopDirect: async () => getApiBridge().mobileTtsStop(),
         onChunkStart: (chunk, index, _total, resp) => {
           const st = get();
           set({
             ttsChunkIndex: index,
             ttsActiveChunk: chunk,
-            ttsActiveVoice: resp.voiceName,
+            ttsActiveVoice: resp.voiceName || st.mobileTtsVoiceName,
             ttsError: null,
           });
+          if (st.mobileTtsAvailable && st.activeBook) {
+            void getApiBridge()
+              .mobileTtsUpdateNowPlaying(
+                st.activeBook.title,
+                st.activeBook.author,
+                st.currentChapter?.title ?? "",
+                true,
+              )
+              .catch(() => undefined);
+          }
           if (st.ttsFollowStream && st.ttsBookId && st.activeBook?.id === st.ttsBookId) {
             const absOffset = st.ttsBaseCharOffset + chunk.startOffset;
             const ttsPage = computeTtsGlobalPage(st.bookPageMap, st.ttsSpineIndex, absOffset);
@@ -357,6 +380,8 @@ export const useAppStore = create<AppStore>((set, get) => {
     ttsBaseCharOffset: 0,
     ttsFollowStream: false,
     ttsCacheStats: null,
+    mobileTtsAvailable: false,
+    mobileTtsVoiceName: "",
     ollamaModels: [],
     updateBannerDismissed: false,
     updateCheckResult: null,
@@ -373,14 +398,26 @@ export const useAppStore = create<AppStore>((set, get) => {
     initialize: async () => {
       const api = getApiBridge();
       try {
-        const [versionInfo, settings, geminiKeySaved] = await Promise.all([
+        const [versionInfo, settings, geminiKeySaved, mobTts] = await Promise.all([
           api.getVersionInfo(),
           api.getSettings(),
           api.hasGeminiApiKey().catch(() => false),
+          api.mobileTtsInfo().catch(() => ({
+            available: false,
+            voiceName: "",
+            platform: "desktop",
+          })),
         ]);
         const palette = resolvePalette(settings, get().systemPrefersDark);
         applyThemeToDocument(palette);
-        set({ versionInfo, settings, geminiKeySaved, initialized: true });
+        set({
+          versionInfo,
+          settings,
+          geminiKeySaved,
+          mobileTtsAvailable: mobTts.available,
+          mobileTtsVoiceName: mobTts.voiceName,
+          initialized: true,
+        });
         await get().refreshLibrary();
         await get().loadGlobalAnnotations();
         await get().refreshTtsStatuses();
@@ -506,9 +543,61 @@ export const useAppStore = create<AppStore>((set, get) => {
     },
 
     importWithFileDialog: async () => {
-      const paths = await getApiBridge().pickEpubFiles();
-      if (paths && paths.length > 0) {
-        await get().importFilesPaths(paths);
+      const importFromHtmlPicker = async () => {
+        if (typeof document === "undefined") return;
+        const files = await new Promise<File[]>((resolve) => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.multiple = true;
+          input.accept = ".epub,.pdf,.docx,.doc";
+          let settled = false;
+          input.onchange = () => {
+            settled = true;
+            resolve(Array.from(input.files ?? []));
+          };
+          window.addEventListener(
+            "focus",
+            () => {
+              window.setTimeout(() => {
+                if (!settled) resolve([]);
+              }, 600);
+            },
+            { once: true },
+          );
+          input.click();
+        });
+        for (const file of files) {
+          const buf = new Uint8Array(await file.arrayBuffer());
+          let bin = "";
+          const chunk = 0x8000;
+          for (let i = 0; i < buf.length; i += chunk) {
+            bin += String.fromCharCode(...buf.subarray(i, i + chunk));
+          }
+          const res = await getApiBridge().importBookBytes(file.name, btoa(bin));
+          if (res.imported.length > 0) {
+            get().showToast("success", `${file.name} kütüphaneye eklendi.`);
+          } else if (res.skippedDuplicates.length > 0) {
+            get().showToast("info", "Seçilen kitap zaten kütüphanede mevcut.");
+          } else if (res.failed.length > 0) {
+            get().showToast("error", res.failed[0] ?? "Dosya içe aktarılamadı.");
+          }
+        }
+        if (files.length > 0) {
+          await get().refreshLibrary();
+        }
+      };
+
+      try {
+        const paths = await getApiBridge().pickEpubFiles();
+        if (paths && paths.length > 0) {
+          if (paths.some((p) => p.startsWith("content://"))) {
+            await importFromHtmlPicker();
+            return;
+          }
+          await get().importFilesPaths(paths);
+        }
+      } catch {
+        await importFromHtmlPicker();
       }
     },
 
@@ -869,6 +958,10 @@ export const useAppStore = create<AppStore>((set, get) => {
       try {
         await getApiBridge().openExternalUrl(url);
       } catch (err) {
+        if (typeof window !== "undefined" && url.startsWith("https://")) {
+          window.open(url, "_blank", "noopener,noreferrer");
+          return;
+        }
         get().showToast("error", extractErrorMessage(err));
       }
     },
@@ -1179,6 +1272,17 @@ export const useAppStore = create<AppStore>((set, get) => {
     stopTts: () => {
       if (ttsController) {
         ttsController.stop();
+      }
+      const st = get();
+      if (st.mobileTtsAvailable && st.activeBook) {
+        void getApiBridge()
+          .mobileTtsUpdateNowPlaying(
+            st.activeBook.title,
+            st.activeBook.author,
+            st.currentChapter?.title ?? "",
+            false,
+          )
+          .catch(() => undefined);
       }
       set({
         ttsState: "idle",

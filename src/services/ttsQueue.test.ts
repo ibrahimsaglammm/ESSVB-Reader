@@ -100,4 +100,32 @@ describe("TtsQueueController", () => {
     expect(ctrl.getState()).toBe("error");
     expect(errors[0]).toContain("Ollama");
   });
+
+  it("supports direct OS TTS playback (Android/iOS/PWA speech) sequentially", async () => {
+    const chunks: TextChunk[] = [
+      { index: 0, text: "İlk cümle.", startOffset: 0, endOffset: 10 },
+      { index: 1, text: "İkinci cümle.", startOffset: 11, endOffset: 24 },
+    ];
+    const spoken: string[] = [];
+    let completed = false;
+
+    const ctrl = new TtsQueueController({
+      synthesize: vi.fn(),
+      speakDirect: async (text) => {
+        spoken.push(text);
+        return { status: "done", voiceName: "Android TTS (Türkçe)" };
+      },
+      onChunkStart: () => {},
+      onStateChange: () => {},
+      onError: () => {},
+      onComplete: () => {
+        completed = true;
+      },
+    });
+
+    await ctrl.start(chunks, 1.1);
+    expect(spoken).toEqual(["İlk cümle.", "İkinci cümle."]);
+    expect(completed).toBe(true);
+    expect(ctrl.getState()).toBe("idle");
+  });
 });

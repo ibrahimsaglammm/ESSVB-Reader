@@ -1,0 +1,16 @@
+[package]
+name = "tauri-plugin-essvb-tts"
+version = "0.2.1"
+authors = ["ESSVB-Reader Contributors"]
+description = "Original MIT-licensed offline native TTS plugin (Android TextToSpeech + iOS/iPadOS AVSpeechSynthesizer) for ESSVB-Reader"
+license = "MIT"
+edition = "2021"
+links = "tauri-plugin-essvb-tts"
+
+[dependencies]
+tauri = "2"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

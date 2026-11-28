@@ -132,6 +132,10 @@ pub fn classify_asset_platform(name: &str) -> &'static str {
         "linux-appimage"
     } else if lower.ends_with(".pkg.tar.zst") {
         "arch-pkg"
+    } else if lower.ends_with(".apk") {
+        "android-arm64"
+    } else if lower.ends_with(".ipa") {
+        "ios-ipa"
     } else {
         "other"
     }
@@ -155,13 +159,19 @@ fn is_arch_like_linux() -> bool {
     }
 }
 
-pub fn select_recommended_asset(
+pub fn select_recommended_asset_for_os(
     assets: &[UpdateAssetInfo],
     is_portable: bool,
     is_windows: bool,
     is_arch_linux: bool,
+    is_android: bool,
+    is_ios: bool,
 ) -> Option<UpdateAssetInfo> {
-    let preferred_tags: &[&str] = if is_windows {
+    let preferred_tags: &[&str] = if is_android {
+        &["android-arm64"]
+    } else if is_ios {
+        &["ios-ipa"]
+    } else if is_windows {
         if is_portable {
             &["windows-portable", "windows-nsis", "windows-msi"]
         } else {
@@ -179,6 +189,22 @@ pub fn select_recommended_asset(
         }
     }
     None
+}
+
+pub fn select_recommended_asset(
+    assets: &[UpdateAssetInfo],
+    is_portable: bool,
+    is_windows: bool,
+    is_arch_linux: bool,
+) -> Option<UpdateAssetInfo> {
+    select_recommended_asset_for_os(
+        assets,
+        is_portable,
+        is_windows,
+        is_arch_linux,
+        cfg!(target_os = "android"),
+        cfg!(target_os = "ios"),
+    )
 }
 
 fn parse_sha256_sums(raw: &str) -> HashMap<String, String> {
@@ -273,7 +299,9 @@ fn validate_update_filename(name: &str) -> Result<String, AppError> {
         || lower.ends_with(".msi")
         || lower.ends_with(".zip")
         || lower.ends_with(".appimage")
-        || lower.ends_with(".pkg.tar.zst");
+        || lower.ends_with(".pkg.tar.zst")
+        || lower.ends_with(".apk")
+        || lower.ends_with(".ipa");
     if !ext_ok {
         return Err(AppError::Security(format!(
             "İzin verilmeyen güncelleme dosya uzantısı: {name}"
@@ -864,8 +892,48 @@ mod tests {
     }
 
     #[test]
-    fn reports_version_0_2_0() {
+    fn classifies_and_selects_mobile_assets() {
+        assert_eq!(
+            classify_asset_platform("ESSVB-Reader-0.2.1-android-arm64.apk"),
+            "android-arm64"
+        );
+        assert_eq!(
+            classify_asset_platform("ESSVB-Reader-0.2.1-ipad-ios-unsigned.ipa"),
+            "ios-ipa"
+        );
+        let assets = vec![
+            UpdateAssetInfo {
+                name: "ESSVB-Reader-0.2.1-android-arm64.apk".into(),
+                download_url: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.1/ESSVB-Reader-0.2.1-android-arm64.apk".into(),
+                size_bytes: 1000,
+                sha256: None,
+                platform_tag: "android-arm64".into(),
+            },
+            UpdateAssetInfo {
+                name: "ESSVB-Reader-0.2.1-ipad-ios-unsigned.ipa".into(),
+                download_url: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.1/ESSVB-Reader-0.2.1-ipad-ios-unsigned.ipa".into(),
+                size_bytes: 1000,
+                sha256: None,
+                platform_tag: "ios-ipa".into(),
+            },
+        ];
+        assert_eq!(
+            select_recommended_asset_for_os(&assets, false, false, false, true, false)
+                .unwrap()
+                .platform_tag,
+            "android-arm64"
+        );
+        assert_eq!(
+            select_recommended_asset_for_os(&assets, false, false, false, false, true)
+                .unwrap()
+                .platform_tag,
+            "ios-ipa"
+        );
+    }
+
+    #[test]
+    fn reports_version_0_2_1() {
         let info = get_app_version_info(false);
-        assert_eq!(info.version, "0.2.0");
+        assert_eq!(info.version, "0.2.1");
     }
 }

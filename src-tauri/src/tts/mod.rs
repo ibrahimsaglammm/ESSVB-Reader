@@ -25,6 +25,42 @@ use crate::tts::local_linux::{synthesize_linux_offline, LocalLinuxTtsProvider};
 #[cfg(windows)]
 use crate::tts::local_windows::{synthesize_windows_offline, LocalWindowsTtsProvider};
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub struct LocalMobileTtsProvider;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[async_trait::async_trait]
+impl TtsProvider for LocalMobileTtsProvider {
+    fn id(&self) -> &'static str {
+        "local"
+    }
+
+    async fn status(&self, _settings: &AppSettings) -> TtsProviderStatus {
+        let voice_name = if cfg!(target_os = "android") {
+            "Android TTS (Türkçe)"
+        } else {
+            "iOS AVSpeechSynthesizer (Türkçe)"
+        };
+        TtsProviderStatus {
+            provider_id: "local".to_string(),
+            available: true,
+            voice_name: voice_name.to_string(),
+            details: "Cihaz içi yerleşik çevrimdışı konuşma motoru hazır".to_string(),
+            setup_hint_tr: "Cihaz ayarlarından çevrimdışı Türkçe ses paketini yönetebilirsiniz."
+                .to_string(),
+            setup_hint_en: "Manage offline Turkish voices in device accessibility/speech settings."
+                .to_string(),
+        }
+    }
+
+    async fn synthesize(&self, _req: &TtsRequest) -> Result<(Vec<u8>, String, String), AppError> {
+        Err(AppError::Tts(
+            "Mobil platformlarda sesli okuma doğrudan yerel sistem eklentisi üzerinden yürütülür."
+                .into(),
+        ))
+    }
+}
+
 pub async fn synthesize_local_offline(
     text: &str,
     rate: f32,
@@ -70,7 +106,16 @@ impl TtsManager {
                 {
                     Ok(Box::new(LocalLinuxTtsProvider))
                 }
-                #[cfg(not(any(windows, target_os = "linux")))]
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                {
+                    Ok(Box::new(LocalMobileTtsProvider))
+                }
+                #[cfg(not(any(
+                    windows,
+                    target_os = "linux",
+                    target_os = "android",
+                    target_os = "ios"
+                )))]
                 {
                     Err(AppError::Tts(
                         "Yerel TTS bu platformda desteklenmiyor".into(),

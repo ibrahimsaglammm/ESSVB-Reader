@@ -2,6 +2,9 @@ node_modules/
 dist/
 dist-packages/
 src-tauri/target/
+src-tauri/plugins/*/target/
+src-tauri/gen/android/
+src-tauri/gen/apple/
 playwright-report/
 test-results/
 coverage/

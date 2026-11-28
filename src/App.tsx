@@ -34,7 +34,7 @@ export function App() {
   const clearToast = useAppStore((s) => s.clearToast);
 
   const lang = settings.language;
-  const version = versionInfo?.version ?? "0.2.0";
+  const version = versionInfo?.version ?? "0.2.1";
 
   useEffect(() => {
     void initialize();

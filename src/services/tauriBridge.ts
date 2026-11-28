@@ -1,6 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as dialogOpen, save as dialogSave } from "@tauri-apps/plugin-dialog";
 import { buildReaderIframeCss } from "../themes/presets";
+import { buildPwaChapterSrcDoc, buildStoredPayload, parseBrowserBookFile } from "./pwaBookParser";
+import {
+  deletePwaBookPayload,
+  hasIndexedDb,
+  loadPwaBookPayload,
+  loadPwaSnapshot,
+  savePwaBookPayload,
+  savePwaKv,
+  type StoredBookPayload,
+} from "./pwaStorage";
 import type {
   AnnotationDto,
   AppSettings,
@@ -31,6 +41,17 @@ export function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+export interface MobileTtsInfoDto {
+  available: boolean;
+  voiceName: string;
+  platform: string;
+}
+
+export interface MobileTtsSpeakResult {
+  status: "done" | "stopped";
+  voiceName: string;
+}
+
 export interface ApiBridge {
   getVersionInfo(): Promise<AppVersionInfo>;
   checkForUpdates(explicitUserRequest: boolean): Promise<UpdateCheckResult>;
@@ -41,6 +62,7 @@ export interface ApiBridge {
     userConfirmed: boolean,
   ): Promise<UpdateApplyResult>;
   importEpubFiles(paths: string[]): Promise<ImportSummary>;
+  importBookBytes(fileName: string, bytesBase64: string): Promise<ImportSummary>;
   importEpubFolder(folderPath: string): Promise<ImportSummary>;
   listBooks(filter?: BookFilterQuery): Promise<BookDto[]>;
   updateBookMetadata(bookId: string, update: BookMetadataUpdate): Promise<BookDto>;
@@ -104,6 +126,17 @@ export interface ApiBridge {
   clearTtsCache(): Promise<number>;
   assistSelectedText(request: TextAssistRequest): Promise<TextAssistResponse>;
   openExternalUrl(url: string): Promise<void>;
+  mobileTtsInfo(): Promise<MobileTtsInfoDto>;
+  mobileTtsSpeakChunk(text: string, rate: number, lang: string): Promise<MobileTtsSpeakResult>;
+  mobileTtsPause(): Promise<void>;
+  mobileTtsResume(): Promise<void>;
+  mobileTtsStop(): Promise<void>;
+  mobileTtsUpdateNowPlaying(
+    title: string,
+    author: string,
+    chapter: string,
+    playing: boolean,
+  ): Promise<void>;
   pickEpubFiles(): Promise<string[] | null>;
   pickFolder(): Promise<string | null>;
   pickSavePath(
@@ -126,6 +159,8 @@ export const tauriApi: ApiBridge = {
       userConfirmed,
     }),
   importEpubFiles: (paths) => invoke("import_epub_files", { paths }),
+  importBookBytes: (fileName, bytesBase64) =>
+    invoke("import_book_bytes", { fileName, bytesBase64 }),
   importEpubFolder: (folderPath) => invoke("import_epub_folder", { folderPath }),
   listBooks: (filter) => invoke("list_books", { filter: filter ?? null }),
   updateBookMetadata: (bookId, update) => invoke("update_book_metadata", { bookId, update }),
@@ -204,6 +239,13 @@ export const tauriApi: ApiBridge = {
   clearTtsCache: () => invoke("clear_tts_cache"),
   assistSelectedText: (request) => invoke("assist_selected_text_cmd", { request }),
   openExternalUrl: (url) => invoke("open_external_url_cmd", { url }),
+  mobileTtsInfo: () => invoke("mobile_tts_info"),
+  mobileTtsSpeakChunk: (text, rate, lang) => invoke("mobile_tts_speak_chunk", { text, rate, lang }),
+  mobileTtsPause: () => invoke("mobile_tts_pause"),
+  mobileTtsResume: () => invoke("mobile_tts_resume"),
+  mobileTtsStop: () => invoke("mobile_tts_stop"),
+  mobileTtsUpdateNowPlaying: (title, author, chapter, playing) =>
+    invoke("mobile_tts_update_now_playing", { title, author, chapter, playing }),
   pickEpubFiles: async () => {
     const selected = await dialogOpen({
       multiple: true,
@@ -312,8 +354,115 @@ export function createBrowserPreviewBridge(): ApiBridge {
   ];
   let annotations: AnnotationDto[] = [];
   let bookmarks: BookmarkDto[] = [];
+  const bookPayloads = new Map<string, StoredBookPayload>();
+  const pendingBrowserFiles = new Map<string, File>();
+  let hydrated = false;
 
-  const chapters: { title: string; bodyHtml: string; plainText: string }[] = [
+  const ensureHydrated = async () => {
+    if (hydrated || !hasIndexedDb()) return;
+    hydrated = true;
+    const snap = await loadPwaSnapshot();
+    if (snap.settings) settings = { ...settings, ...snap.settings };
+    if (snap.shelves) shelves = snap.shelves;
+    if (snap.books) books = snap.books;
+    if (snap.annotations) annotations = snap.annotations;
+    if (snap.bookmarks) bookmarks = snap.bookmarks;
+  };
+
+  const getSpeechVoiceLabel = (): { available: boolean; voiceName: string } => {
+    if (
+      typeof window === "undefined" ||
+      !("speechSynthesis" in window) ||
+      typeof SpeechSynthesisUtterance === "undefined"
+    ) {
+      return { available: false, voiceName: "" };
+    }
+    const voices = window.speechSynthesis.getVoices?.() ?? [];
+    const trVoice = voices.find((v) => v.lang.toLowerCase().startsWith("tr"));
+    const isMobileBrowser =
+      typeof navigator !== "undefined" && /iPad|iPhone|Android/i.test(navigator.userAgent);
+    const available = voices.length > 0 || isMobileBrowser;
+    return {
+      available,
+      voiceName: trVoice?.name || voices[0]?.name || (available ? "Tarayıcı Sesi (Türkçe)" : ""),
+    };
+  };
+
+  const decodeBase64Bytes = (b64: string): Uint8Array => {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) {
+      out[i] = bin.charCodeAt(i);
+    }
+    return out;
+  };
+
+  const importParsedBook = async (fileName: string, bytes: Uint8Array): Promise<BookDto> => {
+    const parsed = await parseBrowserBookFile(fileName, bytes);
+    const now = new Date().toISOString();
+    const bookId = `pwa-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newBook: BookDto = {
+      id: bookId,
+      title: parsed.title,
+      author: parsed.author,
+      language: parsed.language,
+      publisher: parsed.publisher,
+      description: parsed.description,
+      series: "",
+      genre: "",
+      readingStatus: "to_read",
+      progressPercent: 0,
+      lastSpineIndex: 0,
+      lastScrollOffset: 0,
+      lastPageIndex: 0,
+      lastCharOffset: 0,
+      ttsSpineIndex: 0,
+      ttsCharOffset: 0,
+      ttsPageNumber: 1,
+      ttsSnippet: "",
+      spineCount: parsed.chapters.length,
+      epubVersion: parsed.formatLabel,
+      fileHash: parsed.fileHash,
+      coverDataUrl: null,
+      shelfIds: [],
+      tags: [],
+      addedAt: now,
+      updatedAt: now,
+      lastOpenedAt: now,
+    };
+    const payload = buildStoredPayload(bookId, parsed);
+    bookPayloads.set(bookId, payload);
+    books = [newBook, ...books];
+    await savePwaBookPayload(payload);
+    await savePwaKv("books", books);
+    return newBook;
+  };
+
+  const resolveBookPayload = async (bookId: string): Promise<StoredBookPayload> => {
+    const cached = bookPayloads.get(bookId);
+    if (cached) return cached;
+    if (hasIndexedDb()) {
+      const stored = await loadPwaBookPayload(bookId);
+      if (stored) {
+        bookPayloads.set(bookId, stored);
+        return stored;
+      }
+    }
+    return {
+      id: bookId,
+      toc: chapters.map((c, idx) => ({
+        id: `toc-${idx}`,
+        title: c.title,
+        href: `ch${idx}.xhtml`,
+        spineIndex: idx,
+        depth: 0,
+      })),
+      pageMap: chapters.map((c) => Math.max(1, c.plainText.length)),
+      chapters,
+    };
+  };
+
+  const defaultChapters = [
     {
       title: "Birinci Bölüm: Başlangıç",
       bodyHtml:
@@ -330,6 +479,8 @@ export function createBrowserPreviewBridge(): ApiBridge {
     },
   ];
 
+  const chapters = defaultChapters;
+
   const recountShelves = () => {
     shelves = shelves.map((s) => ({
       ...s,
@@ -339,7 +490,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
 
   return {
     getVersionInfo: async () => ({
-      version: "0.2.0",
+      version: "0.2.1",
       stageTr: "Hazırlık Aşaması (Ön Sürüm)",
       stageEn: "Development Preview (Pre-release)",
       isPortable: false,
@@ -350,8 +501,8 @@ export function createBrowserPreviewBridge(): ApiBridge {
         throw new Error("NETWORK_DISABLED: Açık kullanıcı onayı gerekli");
       }
       return {
-        currentVersion: "0.2.0",
-        latestVersion: "0.2.0",
+        currentVersion: "0.2.1",
+        latestVersion: "0.2.1",
         updateAvailable: false,
         releaseNotes: "",
         releasePageUrl: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases",
@@ -374,13 +525,42 @@ export function createBrowserPreviewBridge(): ApiBridge {
         actionHintEn: `Mock download completed: ${fileName}`,
       };
     },
-    importEpubFiles: async (paths) => ({
-      imported: [],
-      skippedDuplicates: [],
-      failed: paths,
-    }),
+    importEpubFiles: async (paths) => {
+      await ensureHydrated();
+      const imported: BookDto[] = [];
+      const failed: string[] = [];
+      for (const p of paths) {
+        const file = pendingBrowserFiles.get(p);
+        if (!file) {
+          failed.push(p);
+          continue;
+        }
+        pendingBrowserFiles.delete(p);
+        try {
+          const buf = new Uint8Array(await file.arrayBuffer());
+          imported.push(await importParsedBook(file.name, buf));
+        } catch (err) {
+          failed.push(err instanceof Error ? err.message : p);
+        }
+      }
+      return { imported, skippedDuplicates: [], failed };
+    },
+    importBookBytes: async (fileName, bytesBase64) => {
+      await ensureHydrated();
+      try {
+        const book = await importParsedBook(fileName, decodeBase64Bytes(bytesBase64));
+        return { imported: [book], skippedDuplicates: [], failed: [] };
+      } catch (err) {
+        return {
+          imported: [],
+          skippedDuplicates: [],
+          failed: [err instanceof Error ? err.message : fileName],
+        };
+      }
+    },
     importEpubFolder: async () => ({ imported: [], skippedDuplicates: [], failed: [] }),
     listBooks: async (filter) => {
+      await ensureHydrated();
       return books.filter((b) => {
         if (filter?.shelfId && !b.shelfIds.includes(filter.shelfId)) return false;
         if (filter?.readingStatus && b.readingStatus !== filter.readingStatus) return false;
@@ -407,9 +587,11 @@ export function createBrowserPreviewBridge(): ApiBridge {
       });
     },
     updateBookMetadata: async (bookId, update) => {
+      await ensureHydrated();
       books = books.map((b) => (b.id === bookId ? { ...b, ...update } : b));
       const found = books.find((b) => b.id === bookId);
       if (!found) throw new Error("Kitap bulunamadı");
+      await savePwaKv("books", books);
       return found;
     },
     updateReadingProgress: async (
@@ -421,6 +603,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
       lastPageIndex,
       lastCharOffset,
     ) => {
+      await ensureHydrated();
       books = books.map((b) =>
         b.id === bookId
           ? {
@@ -434,8 +617,10 @@ export function createBrowserPreviewBridge(): ApiBridge {
             }
           : b,
       );
+      await savePwaKv("books", books);
     },
     updateTtsProgress: async (bookId, ttsSpineIndex, ttsCharOffset, ttsPageNumber, ttsSnippet) => {
+      await ensureHydrated();
       books = books.map((b) =>
         b.id === bookId
           ? {
@@ -447,11 +632,18 @@ export function createBrowserPreviewBridge(): ApiBridge {
             }
           : b,
       );
+      await savePwaKv("books", books);
     },
     deleteBooks: async (bookIds) => {
+      await ensureHydrated();
       const prev = books.length;
       books = books.filter((b) => !bookIds.includes(b.id));
+      for (const id of bookIds) {
+        bookPayloads.delete(id);
+        await deletePwaBookPayload(id);
+      }
       recountShelves();
+      await Promise.all([savePwaKv("books", books), savePwaKv("shelves", shelves)]);
       return prev - books.length;
     },
     listAllTags: async () => Array.from(new Set(books.flatMap((b) => b.tags))).sort(),
@@ -468,8 +660,12 @@ export function createBrowserPreviewBridge(): ApiBridge {
         bookIds.includes(b.id) ? { ...b, readingStatus: status as BookDto["readingStatus"] } : b,
       );
     },
-    listShelves: async () => shelves,
+    listShelves: async () => {
+      await ensureHydrated();
+      return shelves;
+    },
     createShelf: async (name) => {
+      await ensureHydrated();
       const created: ShelfDto = {
         id: `shelf-${Date.now()}`,
         name: name.trim(),
@@ -478,58 +674,68 @@ export function createBrowserPreviewBridge(): ApiBridge {
         createdAt: new Date().toISOString(),
       };
       shelves = [...shelves, created];
+      await savePwaKv("shelves", shelves);
       return created;
     },
     renameShelf: async (shelfId, newName) => {
+      await ensureHydrated();
       shelves = shelves.map((s) => (s.id === shelfId ? { ...s, name: newName.trim() } : s));
+      await savePwaKv("shelves", shelves);
     },
     deleteShelf: async (shelfId) => {
+      await ensureHydrated();
       shelves = shelves.filter((s) => s.id !== shelfId);
       books = books.map((b) => ({
         ...b,
         shelfIds: b.shelfIds.filter((id) => id !== shelfId),
       }));
+      await Promise.all([savePwaKv("shelves", shelves), savePwaKv("books", books)]);
     },
     assignBooksToShelf: async (bookIds, shelfId) => {
+      await ensureHydrated();
       books = books.map((b) =>
         bookIds.includes(b.id) && !b.shelfIds.includes(shelfId)
           ? { ...b, shelfIds: [...b.shelfIds, shelfId] }
           : b,
       );
       recountShelves();
+      await Promise.all([savePwaKv("shelves", shelves), savePwaKv("books", books)]);
     },
     removeBookFromShelf: async (bookId, shelfId) => {
+      await ensureHydrated();
       books = books.map((b) =>
         b.id === bookId ? { ...b, shelfIds: b.shelfIds.filter((s) => s !== shelfId) } : b,
       );
       recountShelves();
+      await Promise.all([savePwaKv("shelves", shelves), savePwaKv("books", books)]);
     },
-    getBookToc: async () =>
-      chapters.map((c, idx) => ({
-        id: `toc-${idx}`,
-        title: c.title,
-        href: `ch${idx}.xhtml`,
-        spineIndex: idx,
-        depth: 0,
-      })),
-    loadChapter: async (_bookId, spineIndex, themeCss) => {
-      const ch = chapters[spineIndex] ?? chapters[0]!;
+    getBookToc: async (bookId) => {
+      await ensureHydrated();
+      const payload = await resolveBookPayload(bookId);
+      return payload.toc;
+    },
+    loadChapter: async (bookId, spineIndex, themeCss) => {
+      await ensureHydrated();
+      const payload = await resolveBookPayload(bookId);
+      const ch = payload.chapters[spineIndex] ?? payload.chapters[0] ?? defaultChapters[0]!;
       const css = themeCss || buildReaderIframeCss(settings, false);
-      const srcDoc = `<!doctype html><html lang="tr"><head><meta charset="utf-8" /><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; script-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';" /><style id="essvb-theme-style">${css}</style></head><body>${ch.bodyHtml}</body></html>`;
+      const srcDoc = buildPwaChapterSrcDoc(ch.title, ch.bodyHtml, css);
       return {
         spineIndex,
-        chapterCount: chapters.length,
+        chapterCount: payload.chapters.length,
         title: ch.title,
         srcDoc,
         bodyHtml: ch.bodyHtml,
         plainText: ch.plainText,
       };
     },
-    searchBook: async (_bookId, query) => {
+    searchBook: async (bookId, query) => {
+      await ensureHydrated();
+      const payload = await resolveBookPayload(bookId);
       const q = query.trim().toLowerCase();
       if (!q) return [];
       const hits: BookSearchMatch[] = [];
-      chapters.forEach((c, idx) => {
+      payload.chapters.forEach((c, idx) => {
         const pos = c.plainText.toLowerCase().indexOf(q);
         if (pos >= 0) {
           hits.push({
@@ -542,9 +748,17 @@ export function createBrowserPreviewBridge(): ApiBridge {
       });
       return hits;
     },
-    getBookPageMap: async () => chapters.map((c) => Math.max(1, c.plainText.length)),
-    listBookmarks: async (bookId) => bookmarks.filter((bm) => bm.bookId === bookId),
+    getBookPageMap: async (bookId) => {
+      await ensureHydrated();
+      const payload = await resolveBookPayload(bookId);
+      return payload.pageMap;
+    },
+    listBookmarks: async (bookId) => {
+      await ensureHydrated();
+      return bookmarks.filter((bm) => bm.bookId === bookId);
+    },
     createBookmark: async (input) => {
+      await ensureHydrated();
       const created: BookmarkDto = {
         id: `bm-${Date.now()}`,
         bookId: input.bookId,
@@ -556,21 +770,27 @@ export function createBrowserPreviewBridge(): ApiBridge {
         createdAt: new Date().toISOString(),
       };
       bookmarks = [created, ...bookmarks];
+      await savePwaKv("bookmarks", bookmarks);
       return created;
     },
     deleteBookmark: async (bookmarkId) => {
+      await ensureHydrated();
       bookmarks = bookmarks.filter((bm) => bm.id !== bookmarkId);
+      await savePwaKv("bookmarks", bookmarks);
     },
-    listAnnotations: async (bookId, search) =>
-      annotations.filter((a) => {
+    listAnnotations: async (bookId, search) => {
+      await ensureHydrated();
+      return annotations.filter((a) => {
         if (bookId && a.bookId !== bookId) return false;
         if (search) {
           const q = search.toLowerCase();
           return a.quoteText.toLowerCase().includes(q) || a.noteText.toLowerCase().includes(q);
         }
         return true;
-      }),
+      });
+    },
     createAnnotation: async (input) => {
+      await ensureHydrated();
       const book = books.find((b) => b.id === input.bookId);
       const created: AnnotationDto = {
         id: `note-${Date.now()}`,
@@ -588,9 +808,11 @@ export function createBrowserPreviewBridge(): ApiBridge {
         updatedAt: new Date().toISOString(),
       };
       annotations = [created, ...annotations];
+      await savePwaKv("annotations", annotations);
       return created;
     },
     updateAnnotation: async (id, noteText, color, highlightStyle) => {
+      await ensureHydrated();
       annotations = annotations.map((a) =>
         a.id === id
           ? {
@@ -603,9 +825,12 @@ export function createBrowserPreviewBridge(): ApiBridge {
             }
           : a,
       );
+      await savePwaKv("annotations", annotations);
     },
     deleteAnnotation: async (id) => {
+      await ensureHydrated();
       annotations = annotations.filter((a) => a.id !== id);
+      await savePwaKv("annotations", annotations);
     },
     exportNotesMarkdown: async () => annotations.length,
     exportNotesJson: async () => annotations.length,
@@ -615,9 +840,13 @@ export function createBrowserPreviewBridge(): ApiBridge {
       booksUpdated: 0,
       annotationsRestored: 0,
     }),
-    getSettings: async () => settings,
+    getSettings: async () => {
+      await ensureHydrated();
+      return settings;
+    },
     saveSettings: async (next) => {
       settings = next;
+      await savePwaKv("settings", settings);
       return settings;
     },
     hasGeminiApiKey: async () => geminiKeySaved,
@@ -715,7 +944,93 @@ export function createBrowserPreviewBridge(): ApiBridge {
         window.open(url, "_blank", "noopener,noreferrer");
       }
     },
-    pickEpubFiles: async () => null,
+    mobileTtsInfo: async () => {
+      const info = getSpeechVoiceLabel();
+      return {
+        available: info.available,
+        voiceName: info.voiceName,
+        platform: "pwa",
+      };
+    },
+    mobileTtsSpeakChunk: async (text, rate, lang) => {
+      const info = getSpeechVoiceLabel();
+      if (!info.available || typeof SpeechSynthesisUtterance === "undefined") {
+        throw new Error("Tarayıcı sesli okuma API'si kullanılamıyor.");
+      }
+      return new Promise<MobileTtsSpeakResult>((resolve) => {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = lang.startsWith("en") ? "en-US" : "tr-TR";
+        utter.rate = Math.min(2.0, Math.max(0.5, rate));
+        const voices = window.speechSynthesis.getVoices?.() ?? [];
+        const match = voices.find((v) =>
+          v.lang.toLowerCase().startsWith(lang.startsWith("en") ? "en" : "tr"),
+        );
+        if (match) utter.voice = match;
+        let settled = false;
+        utter.onend = () => {
+          if (settled) return;
+          settled = true;
+          resolve({ status: "done", voiceName: info.voiceName });
+        };
+        utter.onerror = () => {
+          if (settled) return;
+          settled = true;
+          resolve({ status: "stopped", voiceName: info.voiceName });
+        };
+        window.speechSynthesis.speak(utter);
+      });
+    },
+    mobileTtsPause: async () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.pause();
+      }
+    },
+    mobileTtsResume: async () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.resume();
+      }
+    },
+    mobileTtsStop: async () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    },
+    mobileTtsUpdateNowPlaying: async () => {},
+    pickEpubFiles: async () => {
+      if (typeof document === "undefined") return null;
+      return new Promise<string[] | null>((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.multiple = true;
+        input.accept = ".epub,.docx,.txt,application/epub+zip";
+        let resolved = false;
+        input.onchange = () => {
+          resolved = true;
+          const files = Array.from(input.files ?? []);
+          if (files.length === 0) {
+            resolve(null);
+            return;
+          }
+          const virtualPaths = files.map((file) => {
+            const key = `browser-file://${Date.now()}-${Math.random().toString(36).slice(2)}-${file.name}`;
+            pendingBrowserFiles.set(key, file);
+            return key;
+          });
+          resolve(virtualPaths);
+        };
+        window.addEventListener(
+          "focus",
+          () => {
+            window.setTimeout(() => {
+              if (!resolved) resolve(null);
+            }, 600);
+          },
+          { once: true },
+        );
+        input.click();
+      });
+    },
     pickFolder: async () => null,
     pickSavePath: async () => null,
     pickOpenJsonPath: async () => null,

@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ESSVB-Reader",
   "mainBinaryName": "essvb-reader",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "dev.essvb.reader",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "ESSVB-Reader v0.2.0",
+        "title": "ESSVB-Reader v0.2.1",
         "width": 1280,
         "height": 840,
         "minWidth": 900,
@@ -25,7 +25,7 @@
     ],
     "security": {
       "capabilities": ["default"],
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'self' blob: data:; base-uri 'none'; form-action 'none';"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; worker-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'self' blob: data:; base-uri 'none'; form-action 'none';"
     }
   },
   "bundle": {
@@ -33,7 +33,7 @@
     "targets": "all",
     "category": "Education",
     "shortDescription": "Güvenli, telemetrisiz, çevrimdışı öncelikli EPUB, PDF ve DOC/DOCX okuyucu",
-    "longDescription": "ESSVB-Reader: Sıfır telemetri, sıkı sandbox koruması, raf/etiket sınıflandırma, not/vurgulama, 2 sayfa kitap modu ve Türkçe sesli okuma sunan çapraz platform masaüstü okuyucu (v0.2.0).",
+    "longDescription": "ESSVB-Reader: Sıfır telemetri, sıkı sandbox koruması, raf/etiket sınıflandırma, not/vurgulama, 2 sayfa kitap modu ve Türkçe sesli okuma sunan çapraz platform masaüstü ve mobil okuyucu (v0.2.1).",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -56,6 +56,12 @@
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
       }
+    },
+    "android": {
+      "minSdkVersion": 24
+    },
+    "iOS": {
+      "minimumSystemVersion": "15.0"
     },
     "fileAssociations": [
       {

@@ -1,4 +1,4 @@
-name: Release (Windows 11 & CachyOS/Arch Linux)
+name: Release (Windows 11, CachyOS/Arch, Android APK, iPadOS IPA & PWA)
 
 on:
   push:
@@ -132,8 +132,204 @@ jobs:
           name: cachyos-arch-pkg
           path: release-arch/*
 
+  build-android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 35 & NDK 27
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+
+      - name: Initialize & build signed Android arm64 APK (Samsung Galaxy S21 FE)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          rm -rf src-tauri/gen/android
+          pnpm exec tauri android init --ci
+          pnpm exec tauri android build --apk --target aarch64
+
+          RAW_APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+          if [ -z "${RAW_APK}" ]; then
+            echo "No APK found after tauri android build"
+            exit 1
+          fi
+
+          mkdir -p release-android
+          VER=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          KEYSTORE_PATH="$RUNNER_TEMP/essvb-release.jks"
+          KS_PASS="${ANDROID_KEYSTORE_PASSWORD:-essvbReaderKey2026}"
+          KS_ALIAS="${ANDROID_KEY_ALIAS:-essvb}"
+
+          if [ -n "${ANDROID_KEYSTORE_B64}" ]; then
+            echo "${ANDROID_KEYSTORE_B64}" | base64 -d > "$KEYSTORE_PATH"
+          else
+            keytool -genkeypair -v -keystore "$KEYSTORE_PATH" -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=ESSVB-Reader, OU=OpenSource, O=ESSVB, C=TR"
+          fi
+
+          ALIGNED_APK="$RUNNER_TEMP/aligned.apk"
+          OUT_APK="release-android/ESSVB-Reader-${VER}-android-arm64.apk"
+          "${ANDROID_HOME}/build-tools/35.0.0/zipalign" -p -f 4 "$RAW_APK" "$ALIGNED_APK"
+          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" sign \
+            --ks "$KEYSTORE_PATH" \
+            --ks-key-alias "$KS_ALIAS" \
+            --ks-pass "pass:${KS_PASS}" \
+            --key-pass "pass:${KS_PASS}" \
+            --out "$OUT_APK" "$ALIGNED_APK"
+          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose "$OUT_APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-apk
+          path: release-android/*
+
+  build-ios-ipa:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+
+      - name: Initialize & build unsigned iPadOS/iOS .ipa (iPad 9th Gen AltStore/Sideloadly)
+        run: |
+          set -euo pipefail
+          rm -rf src-tauri/gen/apple
+          pnpm exec tauri ios init --ci
+
+          for plist in src-tauri/gen/apple/*/Info.plist; do
+            /usr/libexec/PlistBuddy -c "Delete :UIBackgroundModes" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$plist"
+            /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$plist"
+            /usr/libexec/PlistBuddy -c "Delete :UIFileSharingEnabled" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$plist"
+            /usr/libexec/PlistBuddy -c "Delete :LSSupportsOpeningDocumentsInPlace" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$plist"
+          done
+
+          XCODE_PROJ="$(find src-tauri/gen/apple -maxdepth 2 -name '*.xcodeproj' | head -n 1)"
+          SCHEME="$(xcodebuild -project "$XCODE_PROJ" -list -json | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8')); const s=d.project.schemes.find(x=>/ios/i.test(x))||d.project.schemes[0]; console.log(s);")"
+          echo "Building scheme=$SCHEME project=$XCODE_PROJ"
+
+          xcodebuild \
+            -project "$XCODE_PROJ" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/ios-derived" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            TARGETED_DEVICE_FAMILY="1,2" \
+            build
+
+          APP_DIR="$(find "$RUNNER_TEMP/ios-derived/Build/Products" -maxdepth 3 -type d -name '*.app' | head -n 1)"
+          if [ -z "$APP_DIR" ]; then
+            echo "iOS .app bundle not found"
+            exit 1
+          fi
+
+          VER=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          mkdir -p "$RUNNER_TEMP/ipa-stage/Payload" release-ios
+          cp -R "$APP_DIR" "$RUNNER_TEMP/ipa-stage/Payload/"
+          (cd "$RUNNER_TEMP/ipa-stage" && zip -r "${GITHUB_WORKSPACE}/release-ios/ESSVB-Reader-${VER}-ipad-ios-unsigned.ipa" Payload)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipados-unsigned-ipa
+          path: release-ios/*
+
+  build-pwa-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+
+      - name: Package Offline PWA Bundle (iPad Safari / Self-host)
+        run: |
+          VER=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          mkdir -p release-pwa
+          (cd dist && zip -r "../release-pwa/ESSVB-Reader-${VER}-pwa-offline.zip" .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pwa-offline-bundle
+          path: release-pwa/*
+
   publish-release:
-    needs: [build-windows, build-linux-appimage, build-cachyos-arch]
+    needs:
+      - build-windows
+      - build-linux-appimage
+      - build-cachyos-arch
+      - build-android-apk
+      - build-ios-ipa
+      - build-pwa-bundle
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -164,7 +360,7 @@ jobs:
             const base = `https://github.com/${process.env.REPO}/releases/download/${process.env.TAG}`;
             const manifest = {
               version: process.env.VER,
-              notes: "Windows 11 (.msi, -setup.exe, portable.zip) ve CachyOS/Arch Linux (.AppImage, .pkg.tar.zst) surumleri.",
+              notes: "Windows 11 (.msi, -setup.exe, portable.zip), CachyOS/Arch Linux (.AppImage, .pkg.tar.zst), Android arm64 (.apk), iPadOS (.ipa) ve iPad Safari Offline PWA surumleri.",
               releasePageUrl: `https://github.com/${process.env.REPO}/releases/tag/${process.env.TAG}`,
               assets: files.map(name => ({
                 name,
@@ -180,8 +376,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', '0.2.0') }}
-          name: ESSVB-Reader ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.2.0' }} (Windows 11 & CachyOS/Arch Linux)
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', '0.2.1') }}
+          name: ESSVB-Reader ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.2.1' }} (Windows 11, CachyOS, Android APK, iPadOS IPA & PWA)
           generate_release_notes: true
           prerelease: false
           files: final-assets/*
