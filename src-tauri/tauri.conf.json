@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ESSVB-Reader",
   "mainBinaryName": "essvb-reader",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "dev.essvb.reader",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "ESSVB-Reader v0.1.1",
+        "title": "ESSVB-Reader v0.2.0",
         "width": 1280,
         "height": 840,
         "minWidth": 900,
@@ -32,8 +32,8 @@
     "active": true,
     "targets": "all",
     "category": "Education",
-    "shortDescription": "Güvenli, telemetrisiz, çevrimdışı öncelikli EPUB okuyucu",
-    "longDescription": "ESSVB-Reader: Sıfır telemetri, sıkı EPUB sandbox koruması, raf/etiket sınıflandırma, not/vurgulama ve Türkçe sesli okuma sunan çapraz platform masaüstü EPUB okuyucu (v0.1.1 hazırlık sürümü).",
+    "shortDescription": "Güvenli, telemetrisiz, çevrimdışı öncelikli EPUB, PDF ve DOC/DOCX okuyucu",
+    "longDescription": "ESSVB-Reader: Sıfır telemetri, sıkı sandbox koruması, raf/etiket sınıflandırma, not/vurgulama, 2 sayfa kitap modu ve Türkçe sesli okuma sunan çapraz platform masaüstü okuyucu (v0.2.0).",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -63,6 +63,20 @@
         "name": "EPUB Book",
         "description": "EPUB E-Book Document",
         "mimeType": "application/epub+zip",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["pdf"],
+        "name": "PDF Document",
+        "description": "PDF E-Book Document",
+        "mimeType": "application/pdf",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["docx", "doc"],
+        "name": "Word Document",
+        "description": "DOC/DOCX Document",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "role": "Viewer"
       }
     ]

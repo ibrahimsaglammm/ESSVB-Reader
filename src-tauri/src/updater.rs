@@ -742,29 +742,29 @@ mod tests {
     #[test]
     fn parses_github_release_and_picks_platform_assets() {
         let sample_gh = r#"{
-          "tag_name": "v0.2.0",
-          "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.2.0",
+          "tag_name": "v0.3.0",
+          "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.3.0",
           "body": "Yeni özellikler eklendi.",
           "assets": [
             {
-              "name": "ESSVB-Reader_0.2.0_x64-setup.exe",
-              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader_0.2.0_x64-setup.exe",
+              "name": "ESSVB-Reader_0.3.0_x64-setup.exe",
+              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/ESSVB-Reader_0.3.0_x64-setup.exe",
               "size": 5400000,
               "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             },
             {
-              "name": "ESSVB-Reader-0.2.0-windows-x64-portable.zip",
-              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader-0.2.0-windows-x64-portable.zip",
+              "name": "ESSVB-Reader-0.3.0-windows-x64-portable.zip",
+              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/ESSVB-Reader-0.3.0-windows-x64-portable.zip",
               "size": 4600000
             },
             {
-              "name": "essvb-reader-0.2.0-1-x86_64.pkg.tar.zst",
-              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/essvb-reader-0.2.0-1-x86_64.pkg.tar.zst",
+              "name": "essvb-reader-0.3.0-1-x86_64.pkg.tar.zst",
+              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/essvb-reader-0.3.0-1-x86_64.pkg.tar.zst",
               "size": 4200000
             },
             {
-              "name": "ESSVB-Reader_0.2.0_amd64.AppImage",
-              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader_0.2.0_amd64.AppImage",
+              "name": "ESSVB-Reader_0.3.0_amd64.AppImage",
+              "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/ESSVB-Reader_0.3.0_amd64.AppImage",
               "size": 92000000
             }
           ]
@@ -772,7 +772,7 @@ mod tests {
 
         let win_inst = parse_release_payload(sample_gh, false, true, false, None).unwrap();
         assert!(win_inst.update_available);
-        assert_eq!(win_inst.latest_version, "0.2.0");
+        assert_eq!(win_inst.latest_version, "0.3.0");
         assert_eq!(
             win_inst.recommended_asset.as_ref().unwrap().platform_tag,
             "windows-nsis"
@@ -827,20 +827,20 @@ mod tests {
     fn parses_github_releases_array_skipping_drafts() {
         let releases_json = r#"[
           {
-            "tag_name": "v0.3.0",
+            "tag_name": "v0.4.0",
             "draft": true,
-            "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.3.0",
+            "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.4.0",
             "assets": []
           },
           {
-            "tag_name": "v0.2.0",
+            "tag_name": "v0.3.0",
             "draft": false,
-            "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.2.0",
+            "html_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.3.0",
             "body": "Ön sürüm notları.",
             "assets": [
               {
-                "name": "ESSVB-Reader_0.2.0_x64-setup.exe",
-                "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader_0.2.0_x64-setup.exe",
+                "name": "ESSVB-Reader_0.3.0_x64-setup.exe",
+                "browser_download_url": "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/ESSVB-Reader_0.3.0_x64-setup.exe",
                 "size": 5400000
               }
             ]
@@ -848,7 +848,7 @@ mod tests {
         ]"#;
 
         let parsed = parse_release_payload(releases_json, false, true, false, None).unwrap();
-        assert_eq!(parsed.latest_version, "0.2.0");
+        assert_eq!(parsed.latest_version, "0.3.0");
         assert!(parsed.update_available);
 
         let gh_latest =
@@ -864,8 +864,8 @@ mod tests {
     }
 
     #[test]
-    fn reports_version_0_1_1() {
+    fn reports_version_0_2_0() {
         let info = get_app_version_info(false);
-        assert_eq!(info.version, "0.1.1");
+        assert_eq!(info.version, "0.2.0");
     }
 }

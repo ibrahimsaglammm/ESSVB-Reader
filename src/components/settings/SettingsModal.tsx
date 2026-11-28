@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Download, KeyRound, RefreshCw, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import { translate } from "../../i18n";
 import { useAppStore, type SettingsTab } from "../../store/useAppStore";
-import type { AppLanguage, ThemePreset, TtsProviderId } from "../../types/models";
+import type { AppLanguage, AppSettings, ThemePreset, TtsProviderId } from "../../types/models";
 
 export function SettingsModal() {
   const settingsOpen = useAppStore((s) => s.settingsOpen);
@@ -43,7 +43,7 @@ export function SettingsModal() {
     { id: "about", label: translate(lang, "tabAbout") },
   ];
 
-  const version = versionInfo?.version ?? "0.1.0";
+  const version = versionInfo?.version ?? "0.2.0";
   const stage =
     lang === "tr"
       ? (versionInfo?.stageTr ?? "Hazırlık Aşaması (Ön Sürüm)")
@@ -111,6 +111,40 @@ export function SettingsModal() {
                   <option value="en">English</option>
                 </select>
               </div>
+              <div className="field-group">
+                <label htmlFor="set-layout">{translate(lang, "defaultLayoutLabel")}</label>
+                <select
+                  id="set-layout"
+                  value={settings.readerLayoutMode}
+                  onChange={(e) =>
+                    void updateSettings({
+                      readerLayoutMode: e.target.value as AppSettings["readerLayoutMode"],
+                    })
+                  }
+                >
+                  <option value="paginated-1">{translate(lang, "layoutPaginated1")}</option>
+                  <option value="paginated-2">{translate(lang, "layoutPaginated2")}</option>
+                  <option value="scroll">{translate(lang, "layoutScroll")}</option>
+                </select>
+              </div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                <input
+                  type="checkbox"
+                  checked={settings.reopenLastBookOnStartup}
+                  onChange={(e) =>
+                    void updateSettings({ reopenLastBookOnStartup: e.target.checked })
+                  }
+                />
+                {translate(lang, "reopenLastBookLabel")}
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                <input
+                  type="checkbox"
+                  checked={settings.ttsFollowPage}
+                  onChange={(e) => void updateSettings({ ttsFollowPage: e.target.checked })}
+                />
+                {translate(lang, "ttsFollowLabel")}
+              </label>
               <div className="alert-box">
                 <strong>{translate(lang, "shortcutsTitle")}</strong>
                 <p style={{ margin: "6px 0 0", fontSize: "13px" }}>

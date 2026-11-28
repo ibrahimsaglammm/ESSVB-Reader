@@ -1,8 +1,8 @@
 # Maintainer: ESSVB-Reader Contributors
 pkgname=essvb-reader
-pkgver=0.1.1
+pkgver=0.2.0
 pkgrel=1
-pkgdesc="Güvenli, telemetrisiz, sandbox korumalı masaüstü EPUB okuyucu (v0.1.1 hazırlık sürümü)"
+pkgdesc="Güvenli, telemetrisiz, sandbox korumalı çapraz platform EPUB, PDF ve DOC/DOCX okuyucu"
 arch=('x86_64')
 url="https://github.com/ibrahimsaglammm/ESSVB-Reader"
 license=('MIT')

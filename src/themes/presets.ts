@@ -1,4 +1,10 @@
-import type { AppSettings, CustomThemeColors, FontFamily, ThemePreset } from "../types/models";
+import type {
+  AppSettings,
+  CustomThemeColors,
+  FontFamily,
+  ReaderLayoutMode,
+  ThemePreset,
+} from "../types/models";
 
 export interface ResolvedPalette {
   background: string;
@@ -103,11 +109,85 @@ export function buildReaderIframeCss(
     | "lineHeight"
     | "marginPx"
     | "textAlign"
-  >,
+  > & { readerLayoutMode?: ReaderLayoutMode },
   systemPrefersDark: boolean,
 ): string {
   const pal = resolvePalette(settings, systemPrefersDark);
   const stack = getLocalFontStack(settings.fontFamily);
+  const mode = settings.readerLayoutMode ?? "paginated-1";
+  const isPaginated = mode === "paginated-1" || mode === "paginated-2";
+  const padX = Math.max(16, Math.min(80, settings.marginPx));
+  const twoColGap = padX * 2;
+
+  const layoutCss = !isPaginated
+    ? `
+    html, body {
+      padding: 28px ${settings.marginPx}px 64px ${settings.marginPx}px !important;
+      max-width: 78ch;
+      margin: 0 auto !important;
+    }`
+    : mode === "paginated-2"
+      ? `
+    html {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100%;
+      height: 100vh !important;
+      overflow-x: hidden !important;
+      overflow-y: hidden !important;
+      scrollbar-width: none !important;
+      background-color: ${pal.background} !important;
+    }
+    body {
+      margin: 0 !important;
+      box-sizing: border-box !important;
+      width: 100%;
+      height: 100vh !important;
+      padding: 26px ${padX}px 28px ${padX}px !important;
+      column-count: 2 !important;
+      column-gap: ${twoColGap}px !important;
+      column-rule: 1px solid ${pal.border};
+      column-fill: auto !important;
+      background-color: ${pal.background} !important;
+    }
+    @media (max-width: 760px) {
+      body {
+        column-count: 1 !important;
+        column-gap: 32px !important;
+        column-rule: none !important;
+        padding: 18px 16px 22px 16px !important;
+      }
+    }`
+      : `
+    html {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100%;
+      height: 100vh !important;
+      overflow-x: hidden !important;
+      overflow-y: hidden !important;
+      scrollbar-width: none !important;
+      background-color: ${pal.background} !important;
+    }
+    body {
+      margin: 0 !important;
+      box-sizing: border-box !important;
+      width: 100%;
+      height: 100vh !important;
+      padding: 26px ${padX}px 28px ${padX}px !important;
+      column-width: calc(100vw - ${padX * 2}px) !important;
+      column-gap: ${padX * 2}px !important;
+      column-fill: auto !important;
+      background-color: ${pal.background} !important;
+    }
+    @media (max-width: 640px) {
+      body {
+        padding: 18px 18px 22px 18px !important;
+        column-width: calc(100vw - 36px) !important;
+        column-gap: 36px !important;
+      }
+    }`;
+
   return `
     :root { color-scheme: ${pal.background === "#12161b" || pal.background === "#000000" ? "dark" : "light"}; }
     html, body {
@@ -117,10 +197,10 @@ export function buildReaderIframeCss(
       font-size: ${settings.fontSizePx}px !important;
       line-height: ${settings.lineHeight} !important;
       text-align: ${settings.textAlign} !important;
-      padding: 28px ${settings.marginPx}px 64px ${settings.marginPx}px !important;
-      max-width: 78ch;
-      margin: 0 auto !important;
     }
+    ${layoutCss}
+    img, svg, pre, table { max-width: 100%; break-inside: avoid; }
+    h1, h2, h3 { break-after: avoid; }
     a { color: ${pal.accent}; }
     blockquote { border-left: 3px solid ${pal.accent}; padding-left: 14px; opacity: 0.9; }
     code, pre { background: ${pal.surfaceAlt}; padding: 2px 5px; border-radius: 4px; }

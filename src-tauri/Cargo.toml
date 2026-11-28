@@ -1,7 +1,7 @@
 [package]
 name = "essvb-reader"
-version = "0.1.1"
-description = "ESSVB-Reader - Guvenli, telemetrisiz, capraz platform EPUB okuyucu"
+version = "0.2.0"
+description = "ESSVB-Reader - Guvenli, telemetrisiz, capraz platform EPUB, PDF, DOCX ve DOC okuyucu"
 authors = ["ESSVB-Reader Contributors"]
 license = "MIT"
 edition = "2021"
@@ -27,6 +27,7 @@ hex = "0.4"
 base64 = "0.22"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 quick-xml = "0.37"
+lopdf = { version = "0.34", default-features = false, features = ["nom_parser"] }
 ammonia = "4.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }

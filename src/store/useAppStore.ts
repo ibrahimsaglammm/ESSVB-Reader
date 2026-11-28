@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { getApiBridge } from "../services/tauriBridge";
 import { TtsQueueController } from "../services/ttsQueue";
 import { applyThemeToDocument, buildReaderIframeCss, resolvePalette } from "../themes/presets";
+import { computeTtsGlobalPage, resolveGlobalPageTarget } from "../utils/pagination";
 import type {
   AnnotationDto,
   AppSettings,
@@ -10,6 +11,7 @@ import type {
   BookFilterQuery,
   BookMetadataUpdate,
   BookSearchMatch,
+  BookmarkDto,
   ChapterContent,
   CreateAnnotationInput,
   ReadingStatus,
@@ -27,6 +29,7 @@ import type {
 
 export type ActiveView = "library" | "reader" | "notes";
 export type SettingsTab = "general" | "themes" | "tts" | "privacy" | "backup" | "about";
+export type ChapterLandingHint = "start" | "end" | { pageIndex?: number; charOffset?: number };
 
 interface ToastMessage {
   id: number;
@@ -64,6 +67,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoUpdateEnabled: true,
   updateCheckIntervalMinutes: 60,
   updateManifestUrl: "https://api.github.com/repos/ibrahimsaglammm/ESSVB-Reader/releases/latest",
+  lastOpenedBookId: null,
+  reopenLastBookOnStartup: true,
+  readerLayoutMode: "paginated-1",
+  ttsFollowPage: true,
 };
 
 interface AppStore {
@@ -84,6 +91,9 @@ interface AppStore {
   bookSearchResults: BookSearchMatch[];
   bookAnnotations: AnnotationDto[];
   globalAnnotations: AnnotationDto[];
+  bookPageMap: number[];
+  bookBookmarks: BookmarkDto[];
+  pendingChapterLanding: ChapterLandingHint | null;
   pendingJumpAnnotation: {
     id: string;
     spineIndex: number;
@@ -98,6 +108,10 @@ interface AppStore {
   ttsActiveVoice: string;
   ttsError: string | null;
   ttsPendingConsentText: string | null;
+  ttsBookId: string | null;
+  ttsSpineIndex: number;
+  ttsBaseCharOffset: number;
+  ttsFollowStream: boolean;
   ttsCacheStats: TtsCacheStats | null;
   ollamaModels: string[];
   updateBannerDismissed: boolean;
@@ -147,9 +161,29 @@ interface AppStore {
   bulkSetStatus: (status: ReadingStatus) => Promise<void>;
 
   // Reader & Notes
-  openBook: (book: BookDto, overrideSpineIndex?: number) => Promise<void>;
-  loadChapterIndex: (spineIndex: number) => Promise<void>;
-  saveReaderProgress: (spineIndex: number, scrollOffset: number) => Promise<void>;
+  openBook: (
+    book: BookDto,
+    overrideSpineIndex?: number,
+    landing?: ChapterLandingHint,
+  ) => Promise<void>;
+  loadChapterIndex: (spineIndex: number, landing?: ChapterLandingHint) => Promise<void>;
+  clearPendingChapterLanding: () => void;
+  saveReaderProgress: (
+    spineIndex: number,
+    scrollOffset: number,
+    pageIndex?: number,
+    charOffset?: number,
+  ) => Promise<void>;
+  jumpToGlobalPage: (globalPage: number) => Promise<void>;
+  toggleBookmarkAtCurrentPage: (
+    spineIndex: number,
+    pageIndex: number,
+    charOffset: number,
+    label: string,
+    pageLabel?: string,
+  ) => Promise<void>;
+  deleteBookmark: (bookmarkId: string) => Promise<void>;
+  jumpToBookmark: (bm: BookmarkDto) => Promise<void>;
   searchInBook: (query: string) => Promise<void>;
   createAnnotation: (input: CreateAnnotationInput) => Promise<void>;
   updateAnnotation: (
@@ -181,7 +215,23 @@ interface AppStore {
   applyUpdate: (asset: UpdateAssetInfo) => Promise<void>;
 
   // TTS Playback
+  updateTtsProgress: (
+    ttsSpineIndex: number,
+    ttsCharOffset: number,
+    ttsPageNumber: number,
+    ttsSnippet: string,
+  ) => Promise<void>;
   speakText: (text: string, bypassGeminiPrompt?: boolean) => Promise<void>;
+  startTtsFromPosition: (
+    bookId: string,
+    spineIndex: number,
+    charOffset: number,
+    textSlice: string,
+    followStream?: boolean,
+    bypassGeminiPrompt?: boolean,
+  ) => Promise<void>;
+  resumeOrStartTtsFromSaved: (bypassGeminiPrompt?: boolean) => Promise<void>;
+  jumpVisualToTtsLocation: () => Promise<void>;
   confirmGeminiSpeak: () => Promise<void>;
   cancelGeminiSpeak: () => void;
   pauseTts: () => void;
@@ -209,12 +259,23 @@ export const useAppStore = create<AppStore>((set, get) => {
           return getApiBridge().synthesizeTtsChunk(text, rate);
         },
         onChunkStart: (chunk, index, _total, resp) => {
+          const st = get();
           set({
             ttsChunkIndex: index,
             ttsActiveChunk: chunk,
             ttsActiveVoice: resp.voiceName,
             ttsError: null,
           });
+          if (st.ttsFollowStream && st.ttsBookId && st.activeBook?.id === st.ttsBookId) {
+            const absOffset = st.ttsBaseCharOffset + chunk.startOffset;
+            const ttsPage = computeTtsGlobalPage(st.bookPageMap, st.ttsSpineIndex, absOffset);
+            void st.updateTtsProgress(
+              st.ttsSpineIndex,
+              absOffset,
+              ttsPage,
+              chunk.text.slice(0, 80),
+            );
+          }
         },
         onStateChange: (state) => set({ ttsState: state }),
         onError: (message) => {
@@ -222,6 +283,36 @@ export const useAppStore = create<AppStore>((set, get) => {
           get().showToast("error", message);
         },
         onComplete: () => {
+          const st = get();
+          if (
+            st.ttsFollowStream &&
+            st.ttsBookId &&
+            st.activeBook?.id === st.ttsBookId &&
+            st.ttsSpineIndex + 1 < st.activeBook.spineCount
+          ) {
+            const nextSpine = st.ttsSpineIndex + 1;
+            const themeCss = buildReaderIframeCss(st.settings, st.systemPrefersDark);
+            void getApiBridge()
+              .loadChapter(st.activeBook.id, nextSpine, themeCss)
+              .then((nextChapter) => {
+                if (get().activeBook?.id !== st.ttsBookId) return;
+                if (get().settings.ttsFollowPage && get().activeView === "reader") {
+                  set({ currentChapter: nextChapter, pendingChapterLanding: "start" });
+                }
+                return get().startTtsFromPosition(
+                  st.ttsBookId!,
+                  nextSpine,
+                  0,
+                  nextChapter.plainText,
+                  true,
+                  true,
+                );
+              })
+              .catch(() => {
+                set({ ttsState: "idle", ttsActiveChunk: null });
+              });
+            return;
+          }
           set({ ttsState: "idle", ttsActiveChunk: null });
         },
       });
@@ -249,6 +340,9 @@ export const useAppStore = create<AppStore>((set, get) => {
     bookSearchResults: [],
     bookAnnotations: [],
     globalAnnotations: [],
+    bookPageMap: [],
+    bookBookmarks: [],
+    pendingChapterLanding: null,
     pendingJumpAnnotation: null,
     ttsStatuses: [],
     ttsState: "idle",
@@ -258,6 +352,10 @@ export const useAppStore = create<AppStore>((set, get) => {
     ttsActiveVoice: "",
     ttsError: null,
     ttsPendingConsentText: null,
+    ttsBookId: null,
+    ttsSpineIndex: 0,
+    ttsBaseCharOffset: 0,
+    ttsFollowStream: false,
     ttsCacheStats: null,
     ollamaModels: [],
     updateBannerDismissed: false,
@@ -286,6 +384,13 @@ export const useAppStore = create<AppStore>((set, get) => {
         await get().refreshLibrary();
         await get().loadGlobalAnnotations();
         await get().refreshTtsStatuses();
+
+        if (settings.reopenLastBookOnStartup && settings.lastOpenedBookId) {
+          const lastBook = get().books.find((b) => b.id === settings.lastOpenedBookId);
+          if (lastBook) {
+            await get().openBook(lastBook);
+          }
+        }
 
         // Only triggers outbound check on startup if user EXPLICITLY enabled autoUpdateEnabled
         if (settings.autoUpdateEnabled) {
@@ -318,7 +423,20 @@ export const useAppStore = create<AppStore>((set, get) => {
     },
 
     clearToast: () => set({ toast: null }),
-    setActiveView: (activeView) => set({ activeView }),
+    setActiveView: (activeView) => {
+      const prevView = get().activeView;
+      set({ activeView });
+      if (activeView === "library" && prevView === "reader") {
+        const curSettings = get().settings;
+        if (curSettings.lastOpenedBookId !== null) {
+          const updatedSettings = { ...curSettings, lastOpenedBookId: null };
+          set({ settings: updatedSettings });
+          void getApiBridge()
+            .saveSettings(updatedSettings)
+            .catch(() => undefined);
+        }
+      }
+    },
     openSettings: (tab = "general") => {
       set({ settingsOpen: true, settingsTab: tab });
       void get().refreshTtsStatuses();
@@ -499,63 +617,161 @@ export const useAppStore = create<AppStore>((set, get) => {
       await get().refreshLibrary();
     },
 
-    openBook: async (book, overrideSpineIndex) => {
+    openBook: async (book, overrideSpineIndex, landing) => {
       const api = getApiBridge();
-      get().stopTts();
+      const prevTtsBookId = get().ttsBookId;
+      if (prevTtsBookId && prevTtsBookId !== book.id) {
+        get().stopTts();
+      }
       const targetSpine = overrideSpineIndex ?? book.lastSpineIndex;
       const themeCss = buildReaderIframeCss(get().settings, get().systemPrefersDark);
       try {
-        const [toc, chapter, notes] = await Promise.all([
+        const [toc, chapter, notes, pageMap, bookmarks] = await Promise.all([
           api.getBookToc(book.id),
           api.loadChapter(book.id, targetSpine, themeCss),
           api.listAnnotations(book.id),
+          api.getBookPageMap(book.id).catch(() => [] as number[]),
+          api.listBookmarks(book.id).catch(() => [] as BookmarkDto[]),
         ]);
+        const landingHint: ChapterLandingHint =
+          landing ??
+          (overrideSpineIndex !== undefined
+            ? "start"
+            : { pageIndex: book.lastPageIndex, charOffset: book.lastCharOffset });
         set({
           activeBook: book,
           toc,
           currentChapter: chapter,
           bookAnnotations: notes,
+          bookPageMap: pageMap,
+          bookBookmarks: bookmarks,
+          pendingChapterLanding: landingHint,
           bookSearchResults: [],
           activeView: "reader",
         });
+
+        const curSettings = get().settings;
+        if (curSettings.lastOpenedBookId !== book.id) {
+          const updatedSettings = { ...curSettings, lastOpenedBookId: book.id };
+          set({ settings: updatedSettings });
+          void api.saveSettings(updatedSettings).catch(() => undefined);
+        }
       } catch (err) {
         get().showToast("error", extractErrorMessage(err));
       }
     },
 
-    loadChapterIndex: async (spineIndex) => {
+    loadChapterIndex: async (spineIndex, landing = "start") => {
       const book = get().activeBook;
       if (!book) return;
-      get().stopTts();
+      const clampedSpine = Math.max(0, Math.min(Math.max(0, book.spineCount - 1), spineIndex));
       const themeCss = buildReaderIframeCss(get().settings, get().systemPrefersDark);
       try {
-        const chapter = await getApiBridge().loadChapter(book.id, spineIndex, themeCss);
-        set({ currentChapter: chapter });
-        await get().saveReaderProgress(spineIndex, 0);
+        const chapter = await getApiBridge().loadChapter(book.id, clampedSpine, themeCss);
+        set({ currentChapter: chapter, pendingChapterLanding: landing });
+        await get().saveReaderProgress(clampedSpine, landing === "end" ? 1 : 0, 0, 0);
       } catch (err) {
         get().showToast("error", extractErrorMessage(err));
       }
     },
 
-    saveReaderProgress: async (spineIndex, scrollOffset) => {
+    clearPendingChapterLanding: () => set({ pendingChapterLanding: null }),
+
+    saveReaderProgress: async (spineIndex, scrollOffset, pageIndex = 0, charOffset = 0) => {
       const book = get().activeBook;
       const ch = get().currentChapter;
       if (!book) return;
       const total = Math.max(1, ch?.chapterCount ?? book.spineCount);
+      const clampedScroll = Math.max(0, Math.min(1, scrollOffset));
       const pct = Math.min(
         100,
-        Math.round(((spineIndex + Math.max(0.05, scrollOffset)) / total) * 100),
+        Math.round(((spineIndex + Math.max(0.05, clampedScroll)) / total) * 100),
       );
-      await getApiBridge().updateReadingProgress(book.id, spineIndex, scrollOffset, pct);
+      await getApiBridge().updateReadingProgress(
+        book.id,
+        spineIndex,
+        clampedScroll,
+        pct,
+        undefined,
+        pageIndex,
+        charOffset,
+      );
       set({
         activeBook: {
           ...book,
           lastSpineIndex: spineIndex,
-          lastScrollOffset: scrollOffset,
+          lastScrollOffset: clampedScroll,
+          lastPageIndex: pageIndex,
+          lastCharOffset: charOffset,
           progressPercent: pct,
         },
+        books: get().books.map((b) =>
+          b.id === book.id
+            ? {
+                ...b,
+                lastSpineIndex: spineIndex,
+                lastScrollOffset: clampedScroll,
+                lastPageIndex: pageIndex,
+                lastCharOffset: charOffset,
+                progressPercent: pct,
+              }
+            : b,
+        ),
       });
-      await get().refreshLibrary();
+    },
+
+    jumpToGlobalPage: async (globalPage) => {
+      const book = get().activeBook;
+      if (!book) return;
+      const target = resolveGlobalPageTarget(get().bookPageMap, globalPage);
+      if (get().currentChapter?.spineIndex === target.spineIndex) {
+        set({ pendingChapterLanding: { pageIndex: target.pageIndexInChapter } });
+      } else {
+        await get().loadChapterIndex(target.spineIndex, { pageIndex: target.pageIndexInChapter });
+      }
+    },
+
+    toggleBookmarkAtCurrentPage: async (spineIndex, pageIndex, charOffset, label, pageLabel) => {
+      const book = get().activeBook;
+      if (!book) return;
+      const existing = get().bookBookmarks.find(
+        (bm) => bm.spineIndex === spineIndex && bm.pageIndex === pageIndex,
+      );
+      if (existing) {
+        await get().deleteBookmark(existing.id);
+        return;
+      }
+      await getApiBridge().createBookmark({
+        bookId: book.id,
+        spineIndex,
+        pageIndex,
+        charOffset,
+        pageLabel: pageLabel ?? `S. ${pageIndex + 1}`,
+        label,
+      });
+      const updated = await getApiBridge().listBookmarks(book.id);
+      set({ bookBookmarks: updated });
+      get().showToast("success", "Yer imi eklendi.");
+    },
+
+    deleteBookmark: async (bookmarkId) => {
+      const book = get().activeBook;
+      await getApiBridge().deleteBookmark(bookmarkId);
+      if (book) {
+        const updated = await getApiBridge().listBookmarks(book.id);
+        set({ bookBookmarks: updated });
+      }
+    },
+
+    jumpToBookmark: async (bm) => {
+      const book = get().activeBook;
+      if (!book) return;
+      const hint: ChapterLandingHint = { pageIndex: bm.pageIndex, charOffset: bm.charOffset };
+      if (get().currentChapter?.spineIndex === bm.spineIndex) {
+        set({ pendingChapterLanding: hint });
+      } else {
+        await get().loadChapterIndex(bm.spineIndex, hint);
+      }
     },
 
     searchInBook: async (query) => {
@@ -793,6 +1009,38 @@ export const useAppStore = create<AppStore>((set, get) => {
       }
     },
 
+    updateTtsProgress: async (ttsSpineIndex, ttsCharOffset, ttsPageNumber, ttsSnippet) => {
+      const book = get().activeBook;
+      if (!book) return;
+      await getApiBridge().updateTtsProgress(
+        book.id,
+        ttsSpineIndex,
+        ttsCharOffset,
+        ttsPageNumber,
+        ttsSnippet,
+      );
+      set({
+        activeBook: {
+          ...book,
+          ttsSpineIndex,
+          ttsCharOffset,
+          ttsPageNumber,
+          ttsSnippet,
+        },
+        books: get().books.map((b) =>
+          b.id === book.id
+            ? {
+                ...b,
+                ttsSpineIndex,
+                ttsCharOffset,
+                ttsPageNumber,
+                ttsSnippet,
+              }
+            : b,
+        ),
+      });
+    },
+
     speakText: async (text, bypassGeminiPrompt = false) => {
       const trimmed = text.trim();
       if (!trimmed) return;
@@ -807,16 +1055,121 @@ export const useAppStore = create<AppStore>((set, get) => {
       }
 
       const chunks = await getApiBridge().splitTtsChunks(trimmed, 340);
-      set({ ttsChunks: chunks, ttsChunkIndex: 0, ttsError: null });
+      set({
+        ttsChunks: chunks,
+        ttsChunkIndex: 0,
+        ttsError: null,
+        ttsFollowStream: false,
+      });
       const ctrl = ensureTtsController();
       await ctrl.start(chunks, settings.ttsRate);
     },
 
+    startTtsFromPosition: async (
+      bookId,
+      spineIndex,
+      charOffset,
+      textSlice,
+      followStream = true,
+      bypassGeminiPrompt = false,
+    ) => {
+      const trimmed = textSlice.trim();
+      if (!trimmed) return;
+      const { settings } = get();
+      if (
+        settings.ttsProvider === "gemini" &&
+        settings.geminiConfirmBeforeSend &&
+        !bypassGeminiPrompt
+      ) {
+        set({
+          ttsPendingConsentText: trimmed,
+          ttsBookId: bookId,
+          ttsSpineIndex: spineIndex,
+          ttsBaseCharOffset: charOffset,
+          ttsFollowStream: followStream,
+        });
+        return;
+      }
+
+      const chunks = await getApiBridge().splitTtsChunks(trimmed, 340);
+      set({
+        ttsBookId: bookId,
+        ttsSpineIndex: spineIndex,
+        ttsBaseCharOffset: charOffset,
+        ttsFollowStream: followStream,
+        ttsChunks: chunks,
+        ttsChunkIndex: 0,
+        ttsError: null,
+      });
+      const ctrl = ensureTtsController();
+      await ctrl.start(chunks, settings.ttsRate);
+    },
+
+    resumeOrStartTtsFromSaved: async (bypassGeminiPrompt = false) => {
+      const book = get().activeBook;
+      const ch = get().currentChapter;
+      if (!book) return;
+      const targetSpine = Math.max(
+        0,
+        Math.min(Math.max(0, book.spineCount - 1), book.ttsSpineIndex),
+      );
+      const targetOffset = Math.max(0, book.ttsCharOffset);
+      const themeCss = buildReaderIframeCss(get().settings, get().systemPrefersDark);
+      const chapter =
+        ch && ch.spineIndex === targetSpine
+          ? ch
+          : await getApiBridge().loadChapter(book.id, targetSpine, themeCss);
+
+      const safeOffset = targetOffset < chapter.plainText.length ? targetOffset : 0;
+      const slice = chapter.plainText.slice(safeOffset);
+      if (get().settings.ttsFollowPage && ch?.spineIndex !== targetSpine) {
+        set({
+          currentChapter: chapter,
+          pendingChapterLanding: { charOffset: safeOffset },
+        });
+      }
+      await get().startTtsFromPosition(
+        book.id,
+        targetSpine,
+        safeOffset,
+        slice,
+        true,
+        bypassGeminiPrompt,
+      );
+    },
+
+    jumpVisualToTtsLocation: async () => {
+      const book = get().activeBook;
+      if (!book) return;
+      const targetSpine = Math.max(
+        0,
+        Math.min(Math.max(0, book.spineCount - 1), book.ttsSpineIndex),
+      );
+      const hint: ChapterLandingHint = { charOffset: Math.max(0, book.ttsCharOffset) };
+      if (get().currentChapter?.spineIndex === targetSpine) {
+        set({ pendingChapterLanding: hint });
+      } else {
+        await get().loadChapterIndex(targetSpine, hint);
+      }
+    },
+
     confirmGeminiSpeak: async () => {
       const pending = get().ttsPendingConsentText;
+      const st = get();
       set({ ttsPendingConsentText: null });
       if (pending) {
-        await get().speakText(pending, true);
+        if (st.ttsFollowStream && st.ttsBookId) {
+          await get().startTtsFromPosition(
+            st.ttsBookId,
+            st.ttsSpineIndex,
+            st.ttsBaseCharOffset,
+            pending,
+            true,
+            true,
+          );
+        } else {
+          await get().speakText(pending, true);
+        }
       }
     },
 
@@ -827,7 +1180,13 @@ export const useAppStore = create<AppStore>((set, get) => {
       if (ttsController) {
         ttsController.stop();
       }
-      set({ ttsState: "idle", ttsActiveChunk: null, ttsChunks: [], ttsChunkIndex: 0 });
+      set({
+        ttsState: "idle",
+        ttsActiveChunk: null,
+        ttsChunks: [],
+        ttsChunkIndex: 0,
+        ttsFollowStream: false,
+      });
     },
     prevTtsChunk: async () => ensureTtsController().prev(),
     nextTtsChunk: async () => ensureTtsController().next(),

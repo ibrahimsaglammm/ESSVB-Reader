@@ -8,29 +8,29 @@ describe("App integration (GitHub update flow & privacy defaults)", () => {
     setApiBridgeForTests(createBrowserPreviewBridge());
   });
 
-  it("renders Turkish default UI with v0.1.1, checks GitHub releases on startup, and asks user before downloading", async () => {
+  it("renders Turkish default UI with v0.2.0, checks GitHub releases on startup, and asks user before downloading", async () => {
     const bridge = createBrowserPreviewBridge();
     const checkSpy = vi.spyOn(bridge, "checkForUpdates").mockResolvedValue({
-      currentVersion: "0.1.1",
-      latestVersion: "0.2.0",
+      currentVersion: "0.2.0",
+      latestVersion: "0.3.0",
       updateAvailable: true,
       releaseNotes: "Windows 11 ve CachyOS paketleri hazır.",
-      releasePageUrl: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.2.0",
+      releasePageUrl: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/tag/v0.3.0",
       downloadUrl:
-        "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader_0.2.0_x64-setup.exe",
+        "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/ESSVB-Reader_0.3.0_x64-setup.exe",
       recommendedAsset: {
-        name: "ESSVB-Reader_0.2.0_x64-setup.exe",
+        name: "ESSVB-Reader_0.3.0_x64-setup.exe",
         downloadUrl:
-          "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader_0.2.0_x64-setup.exe",
+          "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/ESSVB-Reader_0.3.0_x64-setup.exe",
         sizeBytes: 5_200_000,
         sha256: "a".repeat(64),
         platformTag: "windows-nsis",
       },
       assets: [
         {
-          name: "ESSVB-Reader_0.2.0_x64-setup.exe",
+          name: "ESSVB-Reader_0.3.0_x64-setup.exe",
           downloadUrl:
-            "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.2.0/ESSVB-Reader_0.2.0_x64-setup.exe",
+            "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases/download/v0.3.0/ESSVB-Reader_0.3.0_x64-setup.exe",
           sizeBytes: 5_200_000,
           sha256: "a".repeat(64),
           platformTag: "windows-nsis",
@@ -44,7 +44,7 @@ describe("App integration (GitHub update flow & privacy defaults)", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("header-version-pill")).toHaveTextContent("0.1.1");
+      expect(screen.getByTestId("header-version-pill")).toHaveTextContent("0.2.0");
       expect(screen.getByTestId("update-available-modal")).toBeInTheDocument();
     });
 
@@ -71,7 +71,7 @@ describe("App integration (GitHub update flow & privacy defaults)", () => {
     // Verify Gemini TTS stays OFF by default while autoUpdateEnabled is ON
     fireEvent.click(screen.getByTestId("nav-about-btn"));
     await waitFor(() => {
-      expect(screen.getByTestId("about-version-text")).toHaveTextContent("0.1.1");
+      expect(screen.getByTestId("about-version-text")).toHaveTextContent("0.2.0");
     });
 
     fireEvent.click(screen.getByTestId("settings-tab-tts"));

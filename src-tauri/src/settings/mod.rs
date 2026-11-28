@@ -55,6 +55,10 @@ pub struct AppSettings {
     pub auto_update_enabled: bool,
     pub update_check_interval_minutes: u32,
     pub update_manifest_url: String,
+    pub last_opened_book_id: Option<String>,
+    pub reopen_last_book_on_startup: bool,
+    pub reader_layout_mode: String,
+    pub tts_follow_page: bool,
 }
 
 impl Default for AppSettings {
@@ -84,6 +88,10 @@ impl Default for AppSettings {
             auto_update_enabled: true,
             update_check_interval_minutes: 60,
             update_manifest_url: DEFAULT_UPDATE_MANIFEST_URL.to_string(),
+            last_opened_book_id: None,
+            reopen_last_book_on_startup: true,
+            reader_layout_mode: "paginated-1".to_string(),
+            tts_follow_page: true,
         }
     }
 }
@@ -140,6 +148,15 @@ impl AppSettings {
             DEFAULT_UPDATE_MANIFEST_URL.to_string()
         } else {
             self.update_manifest_url.trim().to_string()
+        };
+        self.last_opened_book_id = self
+            .last_opened_book_id
+            .take()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        self.reader_layout_mode = match self.reader_layout_mode.as_str() {
+            "paginated-2" | "scroll" => self.reader_layout_mode,
+            _ => "paginated-1".to_string(),
         };
         self
     }

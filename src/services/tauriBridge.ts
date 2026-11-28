@@ -8,9 +8,11 @@ import type {
   BookDto,
   BookFilterQuery,
   BookMetadataUpdate,
+  BookmarkDto,
   BookSearchMatch,
   ChapterContent,
   CreateAnnotationInput,
+  CreateBookmarkInput,
   ImportSummary,
   RestoreBackupResult,
   ShelfDto,
@@ -48,6 +50,15 @@ export interface ApiBridge {
     scrollOffset: number,
     progressPercent: number,
     readingStatus?: string,
+    lastPageIndex?: number,
+    lastCharOffset?: number,
+  ): Promise<void>;
+  updateTtsProgress(
+    bookId: string,
+    ttsSpineIndex: number,
+    ttsCharOffset: number,
+    ttsPageNumber: number,
+    ttsSnippet: string,
   ): Promise<void>;
   deleteBooks(bookIds: string[]): Promise<number>;
   listAllTags(): Promise<string[]>;
@@ -63,6 +74,10 @@ export interface ApiBridge {
   getBookToc(bookId: string): Promise<TocItem[]>;
   loadChapter(bookId: string, spineIndex: number, themeCss: string): Promise<ChapterContent>;
   searchBook(bookId: string, query: string): Promise<BookSearchMatch[]>;
+  getBookPageMap(bookId: string): Promise<number[]>;
+  listBookmarks(bookId: string): Promise<BookmarkDto[]>;
+  createBookmark(input: CreateBookmarkInput): Promise<BookmarkDto>;
+  deleteBookmark(bookmarkId: string): Promise<void>;
   listAnnotations(bookId?: string, search?: string): Promise<AnnotationDto[]>;
   createAnnotation(input: CreateAnnotationInput): Promise<AnnotationDto>;
   updateAnnotation(
@@ -114,13 +129,31 @@ export const tauriApi: ApiBridge = {
   importEpubFolder: (folderPath) => invoke("import_epub_folder", { folderPath }),
   listBooks: (filter) => invoke("list_books", { filter: filter ?? null }),
   updateBookMetadata: (bookId, update) => invoke("update_book_metadata", { bookId, update }),
-  updateReadingProgress: (bookId, spineIndex, scrollOffset, progressPercent, readingStatus) =>
+  updateReadingProgress: (
+    bookId,
+    spineIndex,
+    scrollOffset,
+    progressPercent,
+    readingStatus,
+    lastPageIndex,
+    lastCharOffset,
+  ) =>
     invoke("update_reading_progress", {
       bookId,
       spineIndex,
       scrollOffset,
       progressPercent,
       readingStatus: readingStatus ?? null,
+      lastPageIndex: lastPageIndex ?? null,
+      lastCharOffset: lastCharOffset ?? null,
+    }),
+  updateTtsProgress: (bookId, ttsSpineIndex, ttsCharOffset, ttsPageNumber, ttsSnippet) =>
+    invoke("update_tts_progress", {
+      bookId,
+      ttsSpineIndex,
+      ttsCharOffset,
+      ttsPageNumber,
+      ttsSnippet,
     }),
   deleteBooks: (bookIds) => invoke("delete_books", { bookIds }),
   listAllTags: () => invoke("list_all_tags"),
@@ -137,6 +170,10 @@ export const tauriApi: ApiBridge = {
   loadChapter: (bookId, spineIndex, themeCss) =>
     invoke("load_chapter", { bookId, spineIndex, themeCss }),
   searchBook: (bookId, query) => invoke("search_book", { bookId, query }),
+  getBookPageMap: (bookId) => invoke("get_book_page_map", { bookId }),
+  listBookmarks: (bookId) => invoke("list_bookmarks", { bookId }),
+  createBookmark: (input) => invoke("create_bookmark", { input }),
+  deleteBookmark: (bookmarkId) => invoke("delete_bookmark", { bookmarkId }),
   listAnnotations: (bookId, search) =>
     invoke("list_annotations", { bookId: bookId ?? null, search: search ?? null }),
   createAnnotation: (input) => invoke("create_annotation", { input }),
@@ -170,7 +207,7 @@ export const tauriApi: ApiBridge = {
   pickEpubFiles: async () => {
     const selected = await dialogOpen({
       multiple: true,
-      filters: [{ name: "EPUB", extensions: ["epub"] }],
+      filters: [{ name: "E-Kitap / Belge", extensions: ["epub", "pdf", "docx", "doc"] }],
     });
     if (!selected) return null;
     return Array.isArray(selected) ? selected : [selected];
@@ -226,6 +263,10 @@ export function createBrowserPreviewBridge(): ApiBridge {
     autoUpdateEnabled: true,
     updateCheckIntervalMinutes: 60,
     updateManifestUrl: "https://api.github.com/repos/ibrahimsaglammm/ESSVB-Reader/releases/latest",
+    lastOpenedBookId: null,
+    reopenLastBookOnStartup: true,
+    readerLayoutMode: "paginated-1",
+    ttsFollowPage: true,
   };
 
   let geminiKeySaved = false;
@@ -252,6 +293,12 @@ export function createBrowserPreviewBridge(): ApiBridge {
       progressPercent: 25,
       lastSpineIndex: 0,
       lastScrollOffset: 0,
+      lastPageIndex: 0,
+      lastCharOffset: 0,
+      ttsSpineIndex: 0,
+      ttsCharOffset: 0,
+      ttsPageNumber: 1,
+      ttsSnippet: "",
       spineCount: 2,
       epubVersion: "3.0",
       fileHash: "demo-hash-1",
@@ -264,6 +311,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
     },
   ];
   let annotations: AnnotationDto[] = [];
+  let bookmarks: BookmarkDto[] = [];
 
   const chapters: { title: string; bodyHtml: string; plainText: string }[] = [
     {
@@ -291,7 +339,7 @@ export function createBrowserPreviewBridge(): ApiBridge {
 
   return {
     getVersionInfo: async () => ({
-      version: "0.1.1",
+      version: "0.2.0",
       stageTr: "Hazırlık Aşaması (Ön Sürüm)",
       stageEn: "Development Preview (Pre-release)",
       isPortable: false,
@@ -302,8 +350,8 @@ export function createBrowserPreviewBridge(): ApiBridge {
         throw new Error("NETWORK_DISABLED: Açık kullanıcı onayı gerekli");
       }
       return {
-        currentVersion: "0.1.1",
-        latestVersion: "0.1.1",
+        currentVersion: "0.2.0",
+        latestVersion: "0.2.0",
         updateAvailable: false,
         releaseNotes: "",
         releasePageUrl: "https://github.com/ibrahimsaglammm/ESSVB-Reader/releases",
@@ -364,15 +412,38 @@ export function createBrowserPreviewBridge(): ApiBridge {
       if (!found) throw new Error("Kitap bulunamadı");
       return found;
     },
-    updateReadingProgress: async (bookId, spineIndex, scrollOffset, progressPercent, status) => {
+    updateReadingProgress: async (
+      bookId,
+      spineIndex,
+      scrollOffset,
+      progressPercent,
+      status,
+      lastPageIndex,
+      lastCharOffset,
+    ) => {
       books = books.map((b) =>
         b.id === bookId
           ? {
               ...b,
               lastSpineIndex: spineIndex,
               lastScrollOffset: scrollOffset,
+              lastPageIndex: lastPageIndex ?? b.lastPageIndex,
+              lastCharOffset: lastCharOffset ?? b.lastCharOffset,
               progressPercent,
               readingStatus: (status as BookDto["readingStatus"]) ?? b.readingStatus,
+            }
+          : b,
+      );
+    },
+    updateTtsProgress: async (bookId, ttsSpineIndex, ttsCharOffset, ttsPageNumber, ttsSnippet) => {
+      books = books.map((b) =>
+        b.id === bookId
+          ? {
+              ...b,
+              ttsSpineIndex,
+              ttsCharOffset,
+              ttsPageNumber,
+              ttsSnippet,
             }
           : b,
       );
@@ -470,6 +541,25 @@ export function createBrowserPreviewBridge(): ApiBridge {
         }
       });
       return hits;
+    },
+    getBookPageMap: async () => chapters.map((c) => Math.max(1, c.plainText.length)),
+    listBookmarks: async (bookId) => bookmarks.filter((bm) => bm.bookId === bookId),
+    createBookmark: async (input) => {
+      const created: BookmarkDto = {
+        id: `bm-${Date.now()}`,
+        bookId: input.bookId,
+        spineIndex: input.spineIndex,
+        pageIndex: input.pageIndex,
+        charOffset: input.charOffset,
+        pageLabel: input.pageLabel,
+        label: input.label,
+        createdAt: new Date().toISOString(),
+      };
+      bookmarks = [created, ...bookmarks];
+      return created;
+    },
+    deleteBookmark: async (bookmarkId) => {
+      bookmarks = bookmarks.filter((bm) => bm.id !== bookmarkId);
     },
     listAnnotations: async (bookId, search) =>
       annotations.filter((a) => {

@@ -69,9 +69,17 @@ export function LibraryView() {
           setNativeFileDragOver(false);
         } else if (event.payload.type === "drop") {
           setNativeFileDragOver(false);
-          const epubs = event.payload.paths.filter((p) => p.toLowerCase().endsWith(".epub"));
-          if (epubs.length > 0) {
-            void importFilesPaths(epubs);
+          const supported = event.payload.paths.filter((p) => {
+            const lower = p.toLowerCase();
+            return (
+              lower.endsWith(".epub") ||
+              lower.endsWith(".pdf") ||
+              lower.endsWith(".docx") ||
+              lower.endsWith(".doc")
+            );
+          });
+          if (supported.length > 0) {
+            void importFilesPaths(supported);
           }
         }
       })
@@ -618,7 +626,7 @@ export function LibraryView() {
                         {book.coverDataUrl ? (
                           <img className="thumb-mini" src={book.coverDataUrl} alt="" />
                         ) : (
-                          <span className="chip">EPUB</span>
+                          <span className="chip">{book.epubVersion || "EPUB"}</span>
                         )}
                       </td>
                     )}

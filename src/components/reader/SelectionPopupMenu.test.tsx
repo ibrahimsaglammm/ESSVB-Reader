@@ -33,6 +33,10 @@ const BASE_SETTINGS: AppSettings = {
   autoUpdateEnabled: true,
   updateCheckIntervalMinutes: 60,
   updateManifestUrl: "https://api.github.com/repos/ibrahimsaglammm/ESSVB-Reader/releases/latest",
+  lastOpenedBookId: null,
+  reopenLastBookOnStartup: true,
+  readerLayoutMode: "paginated-1",
+  ttsFollowPage: true,
 };
 
 describe("SelectionPopupMenu", () => {

@@ -736,6 +736,30 @@ pub fn get_epub_toc(path: &Path) -> Result<Vec<TocItem>, AppError> {
     Ok(extract_toc(&mut archive, &pkg, &mut total_read))
 }
 
+/// Computes plain-text character counts per spine chapter for global page-number calculation.
+pub fn get_epub_spine_char_counts(path: &Path) -> Result<Vec<usize>, AppError> {
+    let mut archive = open_guarded_archive(path)?;
+    let mut total_read = 0u64;
+    let pkg = parse_opf(&mut archive, &mut total_read)?;
+    let mut counts = Vec::with_capacity(pkg.spine_paths.len());
+    for chapter_path in &pkg.spine_paths {
+        let len = match read_zip_entry_by_path(
+            &mut archive,
+            chapter_path,
+            MAX_XML_ENTRY_BYTES,
+            &mut total_read,
+        )? {
+            Some(bytes) => html_to_plain_text(&String::from_utf8_lossy(&bytes))
+                .chars()
+                .count()
+                .max(1),
+            None => 1,
+        };
+        counts.push(len);
+    }
+    Ok(counts)
+}
+
 /// Loads and strictly sanitizes a single spine chapter for sandboxed iframe rendering.
 pub fn load_epub_chapter(
     path: &Path,

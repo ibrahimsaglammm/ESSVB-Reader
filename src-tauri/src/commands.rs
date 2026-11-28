@@ -6,17 +6,18 @@ use tauri::State;
 use crate::assistant::{
     assist_selected_text, open_external_url, TextAssistRequest, TextAssistResponse,
 };
-use crate::core::epub::{
-    get_epub_toc, load_epub_chapter, search_epub_book, BookSearchMatch, ChapterContent, TocItem,
+use crate::core::document::{
+    compute_spine_char_counts, get_document_toc, load_document_chapter, search_document,
 };
+use crate::core::epub::{BookSearchMatch, ChapterContent, TocItem};
 use crate::error::AppError;
 use crate::library::backup::{
     export_library_json, export_notes_json, export_notes_markdown, import_library_json,
     RestoreBackupResult,
 };
 use crate::library::db::{
-    AnnotationDto, BookDto, BookFilterQuery, BookMetadataUpdate, CreateAnnotationInput,
-    ImportSummary, LibraryDb, ShelfDto,
+    AnnotationDto, BookDto, BookFilterQuery, BookMetadataUpdate, BookmarkDto,
+    CreateAnnotationInput, CreateBookmarkInput, ImportSummary, LibraryDb, ShelfDto,
 };
 use crate::settings::secrets::{delete_gemini_api_key, has_gemini_api_key, set_gemini_api_key};
 use crate::settings::{load_settings, save_settings, AppSettings};
@@ -117,6 +118,7 @@ pub fn update_book_metadata(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn update_reading_progress(
     state: State<'_, AppState>,
     book_id: String,
@@ -124,6 +126,8 @@ pub fn update_reading_progress(
     scroll_offset: f64,
     progress_percent: f64,
     reading_status: Option<String>,
+    last_page_index: Option<usize>,
+    last_char_offset: Option<usize>,
 ) -> Result<(), AppError> {
     state.db.update_reading_progress(
         &book_id,
@@ -131,6 +135,26 @@ pub fn update_reading_progress(
         scroll_offset,
         progress_percent,
         reading_status,
+        last_page_index,
+        last_char_offset,
+    )
+}
+
+#[tauri::command]
+pub fn update_tts_progress(
+    state: State<'_, AppState>,
+    book_id: String,
+    tts_spine_index: usize,
+    tts_char_offset: usize,
+    tts_page_number: usize,
+    tts_snippet: String,
+) -> Result<(), AppError> {
+    state.db.update_tts_progress(
+        &book_id,
+        tts_spine_index,
+        tts_char_offset,
+        tts_page_number,
+        &tts_snippet,
     )
 }
 
@@ -218,8 +242,8 @@ pub async fn get_book_toc(
     state: State<'_, AppState>,
     book_id: String,
 ) -> Result<Vec<TocItem>, AppError> {
-    let epub_path = state.db.get_book_epub_path(&book_id)?;
-    tokio::task::spawn_blocking(move || get_epub_toc(&epub_path))
+    let doc_path = state.db.get_book_epub_path(&book_id)?;
+    tokio::task::spawn_blocking(move || get_document_toc(&doc_path))
         .await
         .map_err(|e| AppError::Epub(e.to_string()))?
 }
@@ -231,8 +255,8 @@ pub async fn load_chapter(
     spine_index: usize,
     theme_css: String,
 ) -> Result<ChapterContent, AppError> {
-    let epub_path = state.db.get_book_epub_path(&book_id)?;
-    tokio::task::spawn_blocking(move || load_epub_chapter(&epub_path, spine_index, &theme_css))
+    let doc_path = state.db.get_book_epub_path(&book_id)?;
+    tokio::task::spawn_blocking(move || load_document_chapter(&doc_path, spine_index, &theme_css))
         .await
         .map_err(|e| AppError::Epub(e.to_string()))?
 }
@@ -243,10 +267,42 @@ pub async fn search_book(
     book_id: String,
     query: String,
 ) -> Result<Vec<BookSearchMatch>, AppError> {
-    let epub_path = state.db.get_book_epub_path(&book_id)?;
-    tokio::task::spawn_blocking(move || search_epub_book(&epub_path, &query))
+    let doc_path = state.db.get_book_epub_path(&book_id)?;
+    tokio::task::spawn_blocking(move || search_document(&doc_path, &query))
         .await
         .map_err(|e| AppError::Epub(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn get_book_page_map(
+    state: State<'_, AppState>,
+    book_id: String,
+) -> Result<Vec<usize>, AppError> {
+    let doc_path = state.db.get_book_epub_path(&book_id)?;
+    tokio::task::spawn_blocking(move || compute_spine_char_counts(&doc_path))
+        .await
+        .map_err(|e| AppError::Epub(e.to_string()))?
+}
+
+#[tauri::command]
+pub fn list_bookmarks(
+    state: State<'_, AppState>,
+    book_id: String,
+) -> Result<Vec<BookmarkDto>, AppError> {
+    state.db.list_bookmarks(&book_id)
+}
+
+#[tauri::command]
+pub fn create_bookmark(
+    state: State<'_, AppState>,
+    input: CreateBookmarkInput,
+) -> Result<BookmarkDto, AppError> {
+    state.db.create_bookmark(input)
+}
+
+#[tauri::command]
+pub fn delete_bookmark(state: State<'_, AppState>, bookmark_id: String) -> Result<(), AppError> {
+    state.db.delete_bookmark(&bookmark_id)
 }
 
 #[tauri::command]

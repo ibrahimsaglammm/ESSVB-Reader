@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed reader, v0.1.1", async ({
+test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed reader, v0.2.0", async ({
   page,
 }) => {
   const externalRequests: string[] = [];
@@ -18,8 +18,8 @@ test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed
 
   await page.goto("/", { waitUntil: "networkidle" });
 
-  // 1. Default Turkish UI & v0.1.1 version badge + offline startup update prompt
-  await expect(page.getByTestId("header-version-pill")).toContainText("0.1.1");
+  // 1. Default Turkish UI & v0.2.0 version badge + offline startup update prompt
+  await expect(page.getByTestId("header-version-pill")).toContainText("0.2.0");
   await expect(page.getByTestId("update-prompt-banner")).toBeVisible();
   await expect(page.getByTestId("nav-library-btn")).toContainText("Kütüphane");
 
@@ -47,9 +47,14 @@ test("ESSVB-Reader smoke test: zero external network, Turkish default, sandboxed
   expect(cspContent).toContain("script-src 'none'");
   expect(cspContent).toContain("connect-src 'none'");
 
-  // 4. Open About & Settings to verify v0.1.1, themes, and Gemini TTS off by default
+  // 4. Verify 2-page toggle, separate Reading & TTS badges, and Settings v0.2.0
+  await expect(page.getByTestId("reading-page-badge")).toBeVisible();
+  await expect(page.getByTestId("tts-page-badge")).toBeVisible();
+  await page.getByTestId("layout-mode-btn").click();
+  await expect(page.getByTestId("reader-view")).toContainText("2 Sayfa Kitap");
+
   await page.getByTestId("nav-about-btn").click();
-  await expect(page.getByTestId("about-version-text")).toContainText("0.1.1");
+  await expect(page.getByTestId("about-version-text")).toContainText("0.2.0");
 
   await page.getByTestId("settings-tab-themes").click();
   await page.getByTestId("theme-preset-select").selectOption("sepia");

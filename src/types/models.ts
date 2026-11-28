@@ -2,6 +2,7 @@ export type ReadingStatus = "to_read" | "reading" | "finished";
 export type HighlightColor = "yellow" | "green" | "blue" | "pink" | "purple";
 export type HighlightStyle = "solid" | "underline" | "strikethrough" | "wavy";
 export type TextAssistMode = "translate" | "dictionary" | "ask";
+export type ReaderLayoutMode = "paginated-1" | "paginated-2" | "scroll";
 export type ThemePreset = "light" | "dark" | "sepia" | "high-contrast" | "custom";
 export type FontFamily = "serif" | "sans" | "mono";
 export type TextAlign = "left" | "justify";
@@ -66,6 +67,12 @@ export interface BookDto {
   progressPercent: number;
   lastSpineIndex: number;
   lastScrollOffset: number;
+  lastPageIndex: number;
+  lastCharOffset: number;
+  ttsSpineIndex: number;
+  ttsCharOffset: number;
+  ttsPageNumber: number;
+  ttsSnippet: string;
   spineCount: number;
   epubVersion: string;
   fileHash: string;
@@ -173,6 +180,26 @@ export interface TextAssistResponse {
   result: string;
 }
 
+export interface BookmarkDto {
+  id: string;
+  bookId: string;
+  spineIndex: number;
+  pageIndex: number;
+  charOffset: number;
+  pageLabel: string;
+  label: string;
+  createdAt: string;
+}
+
+export interface CreateBookmarkInput {
+  bookId: string;
+  spineIndex: number;
+  pageIndex: number;
+  charOffset: number;
+  pageLabel: string;
+  label: string;
+}
+
 export interface RestoreBackupResult {
   shelvesRestored: number;
   booksUpdated: number;
@@ -211,6 +238,10 @@ export interface AppSettings {
   autoUpdateEnabled: boolean;
   updateCheckIntervalMinutes: number;
   updateManifestUrl: string;
+  lastOpenedBookId: string | null;
+  reopenLastBookOnStartup: boolean;
+  readerLayoutMode: ReaderLayoutMode;
+  ttsFollowPage: boolean;
 }
 
 export interface TtsProviderStatus {

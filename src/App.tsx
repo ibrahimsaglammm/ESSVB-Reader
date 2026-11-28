@@ -27,7 +27,6 @@ export function App() {
   const closeSettings = useAppStore((s) => s.closeSettings);
   const setShortcutsOpen = useAppStore((s) => s.setShortcutsOpen);
   const importWithFileDialog = useAppStore((s) => s.importWithFileDialog);
-  const loadChapterIndex = useAppStore((s) => s.loadChapterIndex);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const ttsState = useAppStore((s) => s.ttsState);
   const pauseTts = useAppStore((s) => s.pauseTts);
@@ -35,7 +34,7 @@ export function App() {
   const clearToast = useAppStore((s) => s.clearToast);
 
   const lang = settings.language;
-  const version = versionInfo?.version ?? "0.1.0";
+  const version = versionInfo?.version ?? "0.2.0";
 
   useEffect(() => {
     void initialize();
@@ -96,14 +95,7 @@ export function App() {
       }
 
       if (activeView === "reader" && currentChapter) {
-        if (e.key === "ArrowLeft" && currentChapter.spineIndex > 0) {
-          void loadChapterIndex(currentChapter.spineIndex - 1);
-        } else if (
-          e.key === "ArrowRight" &&
-          currentChapter.spineIndex + 1 < currentChapter.chapterCount
-        ) {
-          void loadChapterIndex(currentChapter.spineIndex + 1);
-        } else if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=")) {
+        if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=")) {
           e.preventDefault();
           void updateSettings({ fontSizePx: Math.min(36, settings.fontSizePx + 1) });
         } else if ((e.ctrlKey || e.metaKey) && e.key === "-") {
@@ -128,7 +120,6 @@ export function App() {
     closeSettings,
     currentChapter,
     importWithFileDialog,
-    loadChapterIndex,
     pauseTts,
     resumeTts,
     setShortcutsOpen,

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::core::epub::parse_epub_metadata;
+use crate::core::document::{is_supported_book_extension, parse_document_metadata};
 use crate::error::AppError;
 use crate::paths::{ensure_inside, AppPaths};
 
@@ -41,6 +41,18 @@ pub struct BookDto {
     pub progress_percent: f64,
     pub last_spine_index: usize,
     pub last_scroll_offset: f64,
+    #[serde(default)]
+    pub last_page_index: usize,
+    #[serde(default)]
+    pub last_char_offset: usize,
+    #[serde(default)]
+    pub tts_spine_index: usize,
+    #[serde(default)]
+    pub tts_char_offset: usize,
+    #[serde(default = "default_tts_page_number")]
+    pub tts_page_number: usize,
+    #[serde(default)]
+    pub tts_snippet: String,
     pub spine_count: usize,
     pub epub_version: String,
     pub file_hash: String,
@@ -54,6 +66,34 @@ pub struct BookDto {
 
 fn default_highlight_style() -> String {
     "solid".to_string()
+}
+
+fn default_tts_page_number() -> usize {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkDto {
+    pub id: String,
+    pub book_id: String,
+    pub spine_index: usize,
+    pub page_index: usize,
+    pub char_offset: usize,
+    pub page_label: String,
+    pub label: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBookmarkInput {
+    pub book_id: String,
+    pub spine_index: usize,
+    pub page_index: usize,
+    pub char_offset: usize,
+    pub page_label: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +207,12 @@ impl LibraryDb {
                 progress_percent REAL NOT NULL DEFAULT 0.0,
                 last_spine_index INTEGER NOT NULL DEFAULT 0,
                 last_scroll_offset REAL NOT NULL DEFAULT 0.0,
+                last_page_index INTEGER NOT NULL DEFAULT 0,
+                last_char_offset INTEGER NOT NULL DEFAULT 0,
+                tts_spine_index INTEGER NOT NULL DEFAULT 0,
+                tts_char_offset INTEGER NOT NULL DEFAULT 0,
+                tts_page_number INTEGER NOT NULL DEFAULT 1,
+                tts_snippet TEXT NOT NULL DEFAULT '',
                 spine_count INTEGER NOT NULL DEFAULT 1,
                 file_path TEXT NOT NULL,
                 cover_path TEXT,
@@ -223,26 +269,39 @@ impl LibraryDb {
 
             CREATE INDEX IF NOT EXISTS idx_books_status ON books(reading_status);
             CREATE INDEX IF NOT EXISTS idx_annotations_book ON annotations(book_id, spine_index);
+
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                spine_index INTEGER NOT NULL,
+                page_index INTEGER NOT NULL DEFAULT 0,
+                char_offset INTEGER NOT NULL DEFAULT 0,
+                page_label TEXT NOT NULL DEFAULT '',
+                label TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id, spine_index);
             ",
         )?;
 
-        let mut has_highlight_style = false;
-        {
-            let mut stmt = conn.prepare("PRAGMA table_info(annotations)")?;
-            let cols = stmt.query_map([], |row| row.get::<_, String>(1))?;
-            for col in cols {
-                if col? == "highlight_style" {
-                    has_highlight_style = true;
-                    break;
-                }
-            }
-        }
-        if !has_highlight_style {
-            conn.execute(
-                "ALTER TABLE annotations ADD COLUMN highlight_style TEXT NOT NULL DEFAULT 'solid'",
-                [],
-            )?;
-        }
+        ensure_table_columns(
+            conn,
+            "books",
+            &[
+                ("last_page_index", "INTEGER NOT NULL DEFAULT 0"),
+                ("last_char_offset", "INTEGER NOT NULL DEFAULT 0"),
+                ("tts_spine_index", "INTEGER NOT NULL DEFAULT 0"),
+                ("tts_char_offset", "INTEGER NOT NULL DEFAULT 0"),
+                ("tts_page_number", "INTEGER NOT NULL DEFAULT 1"),
+                ("tts_snippet", "TEXT NOT NULL DEFAULT ''"),
+            ],
+        )?;
+        ensure_table_columns(
+            conn,
+            "annotations",
+            &[("highlight_style", "TEXT NOT NULL DEFAULT 'solid'")],
+        )?;
         Ok(())
     }
 
@@ -280,17 +339,16 @@ impl LibraryDb {
         let mut failed = Vec::new();
 
         for src in source_paths {
-            let ext_ok = src
+            let ext_opt = src
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("epub"))
-                .unwrap_or(false);
-            if !ext_ok {
+                .map(|e| e.to_ascii_lowercase());
+            let Some(ext) = ext_opt.filter(|e| is_supported_book_extension(e)) else {
                 failed.push(format!("{} (desteklenmeyen uzantı)", src.display()));
                 continue;
-            }
+            };
 
-            match self.import_single_epub(src) {
+            match self.import_single_document(src, &ext) {
                 Ok(Some(book)) => imported.push(book),
                 Ok(None) => skipped_duplicates.push(src.display().to_string()),
                 Err(e) => failed.push(format!("{}: {e}", src.display())),
@@ -313,7 +371,7 @@ impl LibraryDb {
         self.import_epub_paths(&found)
     }
 
-    fn import_single_epub(&self, src: &Path) -> Result<Option<BookDto>, AppError> {
+    fn import_single_document(&self, src: &Path, ext: &str) -> Result<Option<BookDto>, AppError> {
         let file_hash = compute_file_sha256(src)?;
 
         {
@@ -333,10 +391,11 @@ impl LibraryDb {
             }
         }
 
-        let parsed = parse_epub_metadata(src)?;
+        let parsed = parse_document_metadata(src)?;
         let book_id = Uuid::new_v4().to_string();
-        let dest_epub = self.paths.books_dir.join(format!("{book_id}.epub"));
-        fs::copy(src, &dest_epub)?;
+        let stored_filename = format!("{book_id}.{ext}");
+        let dest_file = self.paths.books_dir.join(&stored_filename);
+        fs::copy(src, &dest_file)?;
 
         let cover_rel_opt = if let Some(cover_bytes) = parsed.cover_bytes {
             let cover_file = self.paths.covers_dir.join(format!("{book_id}.jpg"));
@@ -356,8 +415,10 @@ impl LibraryDb {
                 "INSERT INTO books (
                     id, title, author, language, publisher, description, series, genre,
                     reading_status, progress_percent, last_spine_index, last_scroll_offset,
-                    spine_count, file_path, cover_path, file_hash, epub_version, added_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'to_read', 0.0, 0, 0.0, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                    last_page_index, last_char_offset, tts_spine_index, tts_char_offset,
+                    tts_page_number, tts_snippet, spine_count, file_path, cover_path,
+                    file_hash, epub_version, added_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'to_read', 0.0, 0, 0.0, 0, 0, 0, 0, 1, '', ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
                 params![
                     book_id,
                     parsed.title,
@@ -368,7 +429,7 @@ impl LibraryDb {
                     parsed.series,
                     parsed.genre,
                     parsed.spine_count as i64,
-                    format!("{book_id}.epub"),
+                    stored_filename,
                     cover_rel_opt,
                     file_hash,
                     parsed.epub_version,
@@ -426,89 +487,56 @@ impl LibraryDb {
         let sql = format!(
             "SELECT id, title, author, language, publisher, description, series, genre,
                     reading_status, progress_percent, last_spine_index, last_scroll_offset,
-                    spine_count, epub_version, file_hash, cover_path, added_at, updated_at, last_opened_at
+                    last_page_index, last_char_offset, tts_spine_index, tts_char_offset,
+                    tts_page_number, tts_snippet, spine_count, epub_version, file_hash,
+                    cover_path, added_at, updated_at, last_opened_at
              FROM books
              ORDER BY {sort_col} {sort_dir}"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let cover_rel: Option<String> = row.get(15)?;
+            let cover_rel: Option<String> = row.get(21)?;
             Ok((
-                id,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, f64>(9)?,
-                row.get::<_, i64>(10)?,
-                row.get::<_, f64>(11)?,
-                row.get::<_, i64>(12)?,
-                row.get::<_, String>(13)?,
-                row.get::<_, String>(14)?,
+                BookDto {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    author: row.get(2)?,
+                    language: row.get(3)?,
+                    publisher: row.get(4)?,
+                    description: row.get(5)?,
+                    series: row.get(6)?,
+                    genre: row.get(7)?,
+                    reading_status: row.get(8)?,
+                    progress_percent: row.get(9)?,
+                    last_spine_index: row.get::<_, i64>(10)?.max(0) as usize,
+                    last_scroll_offset: row.get(11)?,
+                    last_page_index: row.get::<_, i64>(12)?.max(0) as usize,
+                    last_char_offset: row.get::<_, i64>(13)?.max(0) as usize,
+                    tts_spine_index: row.get::<_, i64>(14)?.max(0) as usize,
+                    tts_char_offset: row.get::<_, i64>(15)?.max(0) as usize,
+                    tts_page_number: row.get::<_, i64>(16)?.max(1) as usize,
+                    tts_snippet: row.get(17)?,
+                    spine_count: row.get::<_, i64>(18)?.max(1) as usize,
+                    epub_version: row.get(19)?,
+                    file_hash: row.get(20)?,
+                    cover_data_url: None,
+                    shelf_ids: Vec::new(),
+                    tags: Vec::new(),
+                    added_at: row.get(22)?,
+                    updated_at: row.get(23)?,
+                    last_opened_at: row.get(24)?,
+                },
                 cover_rel,
-                row.get::<_, String>(16)?,
-                row.get::<_, String>(17)?,
-                row.get::<_, Option<String>>(18)?,
             ))
         })?;
 
         let mut list = Vec::new();
         for item in rows {
-            let (
-                id,
-                title,
-                author,
-                language,
-                publisher,
-                description,
-                series,
-                genre,
-                reading_status,
-                progress_percent,
-                last_spine_index,
-                last_scroll_offset,
-                spine_count,
-                epub_version,
-                file_hash,
-                cover_rel,
-                added_at,
-                updated_at,
-                last_opened_at,
-            ) = item?;
-
-            let shelf_ids = shelf_map.get(&id).cloned().unwrap_or_default();
-            let tags = tag_map.get(&id).cloned().unwrap_or_default();
-            let cover_data_url =
+            let (mut dto, cover_rel) = item?;
+            dto.shelf_ids = shelf_map.get(&dto.id).cloned().unwrap_or_default();
+            dto.tags = tag_map.get(&dto.id).cloned().unwrap_or_default();
+            dto.cover_data_url =
                 cover_rel.and_then(|rel| load_cover_data_url(&self.paths.covers_dir, &rel));
-
-            let dto = BookDto {
-                id,
-                title,
-                author,
-                language,
-                publisher,
-                description,
-                series,
-                genre,
-                reading_status,
-                progress_percent,
-                last_spine_index: last_spine_index.max(0) as usize,
-                last_scroll_offset,
-                spine_count: spine_count.max(1) as usize,
-                epub_version,
-                file_hash,
-                cover_data_url,
-                shelf_ids,
-                tags,
-                added_at,
-                updated_at,
-                last_opened_at,
-            };
 
             if let Some(ref f) = filter {
                 if !matches_filter(&dto, f) {
@@ -563,6 +591,7 @@ impl LibraryDb {
             .ok_or_else(|| AppError::NotFound(book_id.to_string()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_reading_progress(
         &self,
         book_id: &str,
@@ -570,6 +599,8 @@ impl LibraryDb {
         scroll_offset: f64,
         progress_percent: f64,
         reading_status: Option<String>,
+        last_page_index: Option<usize>,
+        last_char_offset: Option<usize>,
     ) -> Result<(), AppError> {
         let conn = self
             .conn
@@ -578,43 +609,159 @@ impl LibraryDb {
         let now = Utc::now().to_rfc3339();
         let clamped_pct = progress_percent.clamp(0.0, 100.0);
         let clamped_scroll = scroll_offset.clamp(0.0, 1.0);
+        let page_i = last_page_index.unwrap_or(0) as i64;
+        let char_i = last_char_offset.unwrap_or(0) as i64;
 
         if let Some(status_raw) = reading_status {
             let status = validate_reading_status(&status_raw)?;
             conn.execute(
                 "UPDATE books SET
                     last_spine_index = ?1, last_scroll_offset = ?2, progress_percent = ?3,
-                    reading_status = ?4, last_opened_at = ?5, updated_at = ?5
-                 WHERE id = ?6",
+                    last_page_index = ?4, last_char_offset = ?5,
+                    reading_status = ?6, last_opened_at = ?7, updated_at = ?7
+                 WHERE id = ?8",
                 params![
                     spine_index as i64,
                     clamped_scroll,
                     clamped_pct,
+                    page_i,
+                    char_i,
                     status,
                     now,
                     book_id
                 ],
             )?;
         } else {
-            // Auto-transition to_read -> reading when progress advances
+            // Auto-transition to_read -> reading when progress advances; NEVER alters TTS cursor
             conn.execute(
                 "UPDATE books SET
                     last_spine_index = ?1, last_scroll_offset = ?2, progress_percent = ?3,
+                    last_page_index = ?4, last_char_offset = ?5,
                     reading_status = CASE
                         WHEN ?3 >= 99.5 THEN 'finished'
-                        WHEN reading_status = 'to_read' AND (?1 > 0 OR ?2 > 0.01) THEN 'reading'
+                        WHEN reading_status = 'to_read' AND (?1 > 0 OR ?2 > 0.01 OR ?4 > 0) THEN 'reading'
                         ELSE reading_status
                     END,
-                    last_opened_at = ?4, updated_at = ?4
-                 WHERE id = ?5",
+                    last_opened_at = ?6, updated_at = ?6
+                 WHERE id = ?7",
                 params![
                     spine_index as i64,
                     clamped_scroll,
                     clamped_pct,
+                    page_i,
+                    char_i,
                     now,
                     book_id
                 ],
             )?;
+        }
+        Ok(())
+    }
+
+    pub fn update_tts_progress(
+        &self,
+        book_id: &str,
+        tts_spine_index: usize,
+        tts_char_offset: usize,
+        tts_page_number: usize,
+        tts_snippet: &str,
+    ) -> Result<(), AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Database("DB kilidi hatası".into()))?;
+        let now = Utc::now().to_rfc3339();
+        let snippet_clean: String = tts_snippet.trim().chars().take(120).collect();
+        conn.execute(
+            "UPDATE books SET
+                tts_spine_index = ?1, tts_char_offset = ?2, tts_page_number = ?3,
+                tts_snippet = ?4, updated_at = ?5
+             WHERE id = ?6",
+            params![
+                tts_spine_index as i64,
+                tts_char_offset as i64,
+                tts_page_number.max(1) as i64,
+                snippet_clean,
+                now,
+                book_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_bookmarks(&self, book_id: &str) -> Result<Vec<BookmarkDto>, AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Database("DB kilidi hatası".into()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, book_id, spine_index, page_index, char_offset, page_label, label, created_at
+             FROM bookmarks
+             WHERE book_id = ?1
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![book_id], |row| {
+            Ok(BookmarkDto {
+                id: row.get(0)?,
+                book_id: row.get(1)?,
+                spine_index: row.get::<_, i64>(2)?.max(0) as usize,
+                page_index: row.get::<_, i64>(3)?.max(0) as usize,
+                char_offset: row.get::<_, i64>(4)?.max(0) as usize,
+                page_label: row.get(5)?,
+                label: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
+    }
+
+    pub fn create_bookmark(&self, input: CreateBookmarkInput) -> Result<BookmarkDto, AppError> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Database("DB kilidi hatası".into()))?;
+        let label = input.label.trim().to_string();
+        let page_label = input.page_label.trim().to_string();
+        conn.execute(
+            "INSERT INTO bookmarks (id, book_id, spine_index, page_index, char_offset, page_label, label, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                input.book_id,
+                input.spine_index as i64,
+                input.page_index as i64,
+                input.char_offset as i64,
+                page_label,
+                label,
+                now
+            ],
+        )?;
+        Ok(BookmarkDto {
+            id,
+            book_id: input.book_id,
+            spine_index: input.spine_index,
+            page_index: input.page_index,
+            char_offset: input.char_offset,
+            page_label,
+            label,
+            created_at: now,
+        })
+    }
+
+    pub fn delete_bookmark(&self, bookmark_id: &str) -> Result<(), AppError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| AppError::Database("DB kilidi hatası".into()))?;
+        let deleted = conn.execute("DELETE FROM bookmarks WHERE id = ?1", params![bookmark_id])?;
+        if deleted == 0 {
+            return Err(AppError::NotFound("Yer imi bulunamadı".into()));
         }
         Ok(())
     }
@@ -1269,7 +1416,7 @@ fn collect_epub_files_recursive(
             && path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("epub"))
+                .map(is_supported_book_extension)
                 .unwrap_or(false)
         {
             out.push(path);
@@ -1279,4 +1426,80 @@ fn collect_epub_files_recursive(
         }
     }
     Ok(())
+}
+
+fn ensure_table_columns(
+    conn: &Connection,
+    table: &str,
+    columns: &[(&str, &str)],
+) -> Result<(), AppError> {
+    let mut existing = HashSet::new();
+    {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for col in rows {
+            existing.insert(col?);
+        }
+    }
+    for (col_name, col_def) in columns {
+        if !existing.contains(*col_name) {
+            conn.execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paths::AppPaths;
+    use tempfile::TempDir;
+
+    #[test]
+    fn separate_reading_and_tts_progress_plus_bookmarks() {
+        let dir = TempDir::new().unwrap();
+        let paths = AppPaths::from_base_dir(dir.path().to_path_buf(), true).unwrap();
+        let db = LibraryDb::open(paths).unwrap();
+
+        let rtf_doc = dir.path().join("ornek.doc");
+        std::fs::write(
+            &rtf_doc,
+            br"{\rtf1\ansi Merhaba ilk paragraf.\par Ikinci paragraf.}",
+        )
+        .unwrap();
+        let summary = db.import_epub_paths(&[rtf_doc]).unwrap();
+        assert_eq!(summary.imported.len(), 1);
+        let id = summary.imported[0].id.clone();
+
+        db.update_reading_progress(&id, 2, 0.45, 50.0, None, Some(19), Some(4200))
+            .unwrap();
+        db.update_tts_progress(&id, 1, 1800, 14, "Kaldığı sesli cümle")
+            .unwrap();
+
+        let fetched = db.get_book_by_id(&id).unwrap().unwrap();
+        assert_eq!(fetched.last_spine_index, 2);
+        assert_eq!(fetched.last_page_index, 19);
+        assert_eq!(fetched.last_char_offset, 4200);
+        assert_eq!(fetched.tts_spine_index, 1);
+        assert_eq!(fetched.tts_char_offset, 1800);
+        assert_eq!(fetched.tts_page_number, 14);
+        assert_eq!(fetched.tts_snippet, "Kaldığı sesli cümle");
+
+        let bm = db
+            .create_bookmark(CreateBookmarkInput {
+                book_id: id.clone(),
+                spine_index: 2,
+                page_index: 19,
+                char_offset: 4200,
+                page_label: "Sayfa 20".into(),
+                label: "Önemli yer".into(),
+            })
+            .unwrap();
+        assert_eq!(db.list_bookmarks(&id).unwrap().len(), 1);
+        db.delete_bookmark(&bm.id).unwrap();
+        assert_eq!(db.list_bookmarks(&id).unwrap().len(), 0);
+    }
 }
