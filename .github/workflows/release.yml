@@ -146,10 +146,10 @@ jobs:
         with:
           packages: "platform-tools"
 
-      - name: Install Android SDK 35 & NDK 27
+      - name: Install Android SDK 36 & NDK 27
         run: |
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -272,7 +272,25 @@ jobs:
           EOF
           export XCODE_XCCONFIG_FILE="$RUNNER_TEMP/unsigned.xcconfig"
 
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' src-tauri/gen/apple/*.xcodeproj/project.pbxproj 2>/dev/null || true
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const appleDir = "src-tauri/gen/apple";
+            const proj = fs.readdirSync(appleDir).find((f) => f.endsWith(".xcodeproj"));
+            if (!proj) throw new Error("Missing .xcodeproj");
+            const pbxPath = path.join(appleDir, proj, "project.pbxproj");
+            let txt = fs.readFileSync(pbxPath, "utf8");
+            txt = txt.replace(
+              /^\s*(CODE_SIGN_IDENTITY(?:\[[^\]]*\])?|CODE_SIGNING_ALLOWED|CODE_SIGNING_REQUIRED|CODE_SIGN_STYLE|DEVELOPMENT_TEAM|PROVISIONING_PROFILE_SPECIFIER|TARGETED_DEVICE_FAMILY)\s*=.*;\r?\n/gm,
+              ""
+            );
+            txt = txt.replace(
+              /(buildSettings\s*=\s*\{\r?\n)/g,
+              "$1\t\t\t\tCODE_SIGN_IDENTITY = \"\";\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n\t\t\t\tCODE_SIGN_STYLE = Manual;\n\t\t\t\tDEVELOPMENT_TEAM = \"\";\n\t\t\t\tTARGETED_DEVICE_FAMILY = \"1,2\";\n"
+            );
+            fs.writeFileSync(pbxPath, txt);
+            console.log("Patched unsigned manual buildSettings in " + pbxPath);
+          '
 
           # tauri ios build orchestrates cli-options-server + Rust + Swift, producing .app/.xcarchive
           # before code-signed exportArchive; ignore exportArchive signing error if unsigned .app is produced.

@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "dev.essvb.reader.tts"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 24
