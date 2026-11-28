@@ -142,7 +142,9 @@ jobs:
           distribution: zulu
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools"
 
       - name: Install Android SDK 35 & NDK 27
         run: |
@@ -180,7 +182,7 @@ jobs:
           set -euo pipefail
           rm -rf src-tauri/gen/android
           pnpm exec tauri android init --ci
-          pnpm exec tauri android build --apk --target aarch64
+          pnpm exec tauri android build --apk --target aarch64 --ci
 
           RAW_APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)"
           if [ -z "${RAW_APK}" ]; then
@@ -261,27 +263,32 @@ jobs:
             /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$plist"
           done
 
-          XCODE_PROJ="$(find src-tauri/gen/apple -maxdepth 2 -name '*.xcodeproj' | head -n 1)"
-          SCHEME="$(xcodebuild -project "$XCODE_PROJ" -list -json | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8')); const s=d.project.schemes.find(x=>/ios/i.test(x))||d.project.schemes[0]; console.log(s);")"
-          echo "Building scheme=$SCHEME project=$XCODE_PROJ"
+          cat > "$RUNNER_TEMP/unsigned.xcconfig" <<'EOF'
+          CODE_SIGN_IDENTITY =
+          CODE_SIGNING_REQUIRED = NO
+          CODE_SIGNING_ALLOWED = NO
+          DEVELOPMENT_TEAM =
+          TARGETED_DEVICE_FAMILY = 1,2
+          EOF
+          export XCODE_XCCONFIG_FILE="$RUNNER_TEMP/unsigned.xcconfig"
 
-          xcodebuild \
-            -project "$XCODE_PROJ" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath "$RUNNER_TEMP/ios-derived" \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            TARGETED_DEVICE_FAMILY="1,2" \
-            build
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' src-tauri/gen/apple/*.xcodeproj/project.pbxproj 2>/dev/null || true
 
-          APP_DIR="$(find "$RUNNER_TEMP/ios-derived/Build/Products" -maxdepth 3 -type d -name '*.app' | head -n 1)"
+          # tauri ios build orchestrates cli-options-server + Rust + Swift, producing .app/.xcarchive
+          # before code-signed exportArchive; ignore exportArchive signing error if unsigned .app is produced.
+          if ! pnpm exec tauri ios build --ci; then
+            echo "tauri ios build returned non-zero (expected during unsigned export); checking for built .app bundle..."
+          fi
+
+          APP_DIR="$(find src-tauri/gen/apple -type d -name '*.app' | head -n 1 || true)"
           if [ -z "$APP_DIR" ]; then
-            echo "iOS .app bundle not found"
+            APP_DIR="$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -name '*.app' -path '*iphoneos*' | head -n 1 || true)"
+          fi
+          if [ -z "$APP_DIR" ]; then
+            echo "iOS .app bundle not found after tauri ios build"
             exit 1
           fi
+          echo "Found built iOS .app bundle at: $APP_DIR"
 
           VER=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
           mkdir -p "$RUNNER_TEMP/ipa-stage/Payload" release-ios
